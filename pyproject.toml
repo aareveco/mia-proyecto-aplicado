@@ -1,0 +1,31 @@
+[project]
+name = "rag-gemini-qdrant"
+version = "0.1.0"
+description = "RAG pipeline with Gemini Embeddings and Qdrant in-memory"
+requires-python = ">=3.10"
+
+dependencies = [
+  "qdrant-client>=1.9.0",
+  "google-genai>=0.3.0",
+  "pydantic>=2.5.0",
+  "numpy>=1.24.0",
+  "python-dotenv>=1.2.1",
+  "langchain-community>=0.2.0",
+  "pypdf>=4.0.0",
+  "pandas>=2.3.3",
+  "ragas>=0.3.9",
+  "langchain>=1.1.0",
+  "langchain-google-genai>=3.2.0",
+  "streamlit>=1.51.0",
+  "docling>=2.63.0",
+  "langchain-text-splitters>=1.0.0",
+  "sentence-transformers>=5.1.2",
+  "langchain-ollama>=1.0.0",
+  "langchain-huggingface>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+  "ipython",
+  "rich",
+]
