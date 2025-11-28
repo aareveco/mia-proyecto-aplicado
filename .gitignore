@@ -1,0 +1,11 @@
+*.env*
+.venv
+*__pycache__*
+.DS_Store
+uv.lock
+
+misc files*
+data_val*
+data_quarantine*
+*.log
+qdrant_storage*
