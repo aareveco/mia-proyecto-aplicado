@@ -1,3 +1,4 @@
+# src/application/services/rag_service.py
 from typing import List
 from src.domain.models import ProcessedChunk
 from src.application.ports.embedder_port import AbstractEmbedder
@@ -34,7 +35,6 @@ class VectorStoreService:
 
         # Reconstruimos ProcessedChunk desde payload
         return [ProcessedChunk(**r) for r in results_dict]
-
 
 
 

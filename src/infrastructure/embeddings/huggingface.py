@@ -1,3 +1,4 @@
+# src/infrastructure/embeddings/huggingface.py
 from src.domain.models import ProcessedChunk
 from src.application.ports.embedder_port import AbstractEmbedder
 
