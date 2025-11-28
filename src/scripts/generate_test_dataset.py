@@ -1,4 +1,4 @@
-
+#src/scripts/generate_test_dataset.py
 import sys
 import os
 
@@ -7,6 +7,11 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')
 
 from src.infrastructure.loaders.pdf_loader import PDFLoader
 from src.application.services.dataset_generation_service import DatasetGenerationService
+
+
+from dotenv import load_dotenv
+load_dotenv()
+
 
 def main():
     # --- Configuration ---

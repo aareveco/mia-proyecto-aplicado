@@ -1,10 +1,12 @@
 # src/application/services/dataset_generation_service.py
+
 import os
 import glob
 from pathlib import Path
 from src.application.ports.loader_port import AbstractLoader
 from src.infrastructure.evaluation.ragas_generator import RagasLocalGenerator
-from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
+#from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
+from src.infrastructure.llm.gemini_factory import GeminiFactory
 from langchain_core.documents import Document
 
 class DatasetGenerationService:
@@ -12,8 +14,8 @@ class DatasetGenerationService:
         self.loader = loader
         
         # Inicializamos recursos locales (Ollama + HF)
-        self.llm = LocalResourcesFactory.get_generator_llm(model_name="qwen2.5:1.5b")
-        self.embedder = LocalResourcesFactory.get_embeddings()
+        self.llm = GeminiFactory.get_generator_llm(model_name="gemini-2.0-flash")
+        self.embedder = GeminiFactory.get_embeddings()
         self.generator = RagasLocalGenerator(self.llm, self.embedder)
 
     def run(self, input_dir: str, output_dir: str = "evals/datasets", test_size: int = 10):
@@ -57,6 +59,7 @@ class DatasetGenerationService:
 
         # 3. Generate Dataset (Ragas will create a KG from the combined documents)
         print("[Service] Starting Ragas Generation...")
+
         df = self.generator.generate_testset(all_langchain_docs, test_size=test_size)
 
         # 4. Save

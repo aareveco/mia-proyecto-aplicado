@@ -1,4 +1,4 @@
-# scripts/run_eval.py
+# src/scripts/run_eval.py
 import sys
 import os
 import asyncio
@@ -20,16 +20,26 @@ from src.application.services.rag_service import (
     run_retrieval_service,
 )
 from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
+from src.infrastructure.llm.gemini_factory import GeminiFactory
 
 QDRANT_PATH = "qdrant_storage"
+
+from dotenv import load_dotenv
+load_dotenv()
+
 
 
 def get_rag_service() -> VectorStoreService:
     """
     Re-instancia el servicio de RAG (solo retrieval en este caso).
     """
-    embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
-    db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
+    # embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
+    # db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
+       # 1. Get the Gemini Embedder Adapter (Port Implementation)
+    embedder = GeminiFactory.get_app_embedder(model_name="models/text-embedding-004")
+    
+    # 2. Connect to Qdrant
+    db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH) 
     return VectorStoreService(embedder, db_impl)
 
 
@@ -68,7 +78,6 @@ async def main():
         # Para métricas de retrieval (context_precision/recall),
         # la columna 'answer' NO es crítica, pero Ragas la acepta sin problema.
         generated_answer = results[0].content if results else "No answer found"
-
         answers.append(generated_answer)
         contexts.append(retrieved_texts)
 
@@ -89,8 +98,11 @@ async def main():
 
     # 3. Configurar LLM y embeddings que usará Ragas para juzgar
     #    (LLM-as-a-judge para context_precision / context_recall)
-    llm = LocalResourcesFactory.get_generator_llm("qwen2.5:1.5b")
-    embeddings = LocalResourcesFactory.get_embeddings()
+    # llm = LocalResourcesFactory.get_generator_llm("qwen2.5:1.5b")
+    # embeddings = LocalResourcesFactory.get_embeddings()
+
+    llm = GeminiFactory.get_generator_llm("gemini-2.0-flash")
+    embeddings = GeminiFactory.get_embeddings()
 
     ragas_run_config = RunConfig(
         timeout=120,      # segundos para cada muestra (ajusta a 180–300 si sigues con Timeouts)

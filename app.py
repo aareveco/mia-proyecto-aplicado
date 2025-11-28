@@ -1,3 +1,4 @@
+# app.py
 import os
 import time
 import pandas as pd
@@ -5,10 +6,14 @@ import asyncio
 import streamlit as st
 from dotenv import load_dotenv
 
-from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
+# --- CHANGED: Removed HuggingFaceEmbedder, Added GeminiFactory ---
+# from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
+from src.infrastructure.llm.gemini_factory import GeminiFactory
 from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
 from src.application.services.rag_service import VectorStoreService, run_indexing_service, run_retrieval_service
-from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
+
+# --- REMOVED: LocalResourcesFactory is no longer needed if using Gemini ---
+# from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
 
 from datasets import Dataset
 from ragas import evaluate
@@ -20,7 +25,7 @@ load_dotenv()
 
 # ==============================================================================
 
-QDRANT_PATH = "qdrant_storage" # La misma ruta  que run_eval.py
+QDRANT_PATH = "qdrant_storage" 
 DATASET_PATH = "datasets/golden_dataset.csv"
 
 st.set_page_config(page_title="Hito 1: Clean RAG Architecture", layout="wide")
@@ -36,8 +41,9 @@ def get_vector_service() -> VectorStoreService:
     Instancia los adaptadores y el servicio de aplicación.
     Usa persistencia en disco para compartir datos con los scripts.
     """
-    # 1. Adaptador de Embeddings
-    embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
+    # --- CHANGED: Use Gemini Embedder to match run_eval.py ---
+    # embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
+    embedder = GeminiFactory.get_app_embedder(model_name="models/text-embedding-004")
     
     # 2. Adaptador de Base de Datos Vectorial (CON PERSISTENCIA)
     db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
@@ -52,7 +58,7 @@ def get_vector_service() -> VectorStoreService:
 
 class BaselineEvaluator:
     """
-    Evaluador real usando Ragas y Local LLM.
+    Evaluador real usando Ragas y Gemini (Mirroring run_eval.py).
     """
     def __init__(self, rag_service: VectorStoreService):
         self.rag_service = rag_service
@@ -102,19 +108,25 @@ class BaselineEvaluator:
             "answer": answers,
             "contexts": contexts,
             "ground_truth": ground_truths,
+
+            
         }
         eval_dataset = Dataset.from_dict(eval_data)
 
-        # 5. Configurar LLM Local para Evaluación
-        status.text("Calculando métricas con Ragas (esto puede tardar)...")
+        # 5. Configurar LLM para Evaluación (Judge)
+        status.text("Calculando métricas con Ragas (usando Gemini)...")
         
-        llm = LocalResourcesFactory.get_generator_llm("qwen2.5:1.5b")
-        embeddings = LocalResourcesFactory.get_embeddings()
+        # --- CHANGED: Use Gemini for Evaluation Judge instead of LocalResourcesFactory ---
+        # llm = LocalResourcesFactory.get_generator_llm("qwen2.5:1.5b")
+        # embeddings = LocalResourcesFactory.get_embeddings()
+        
+        llm = GeminiFactory.get_generator_llm("gemini-2.0-flash")
+        embeddings = GeminiFactory.get_embeddings()
 
-        # RunConfig para evitar TimeoutError con LLM local
+        # RunConfig para evitar TimeoutError
         run_config = RunConfig(
-            timeout=120,     # súbelo si aún ves timeouts (180-300)
-            max_workers=2,   # menos concurrencia para no ahogar la máquina
+            timeout=120,     
+            max_workers=2,   
             max_retries=2,
         )
 
@@ -125,7 +137,7 @@ class BaselineEvaluator:
             llm=llm,
             embeddings=embeddings,
             run_config=run_config,
-            raise_exceptions=False,
+            # raise_exceptions=False, 
         )
 
         progress_bar.empty()
@@ -140,7 +152,7 @@ class BaselineEvaluator:
 
 def main():
     st.title("🧪 Hito 1: Clean Architecture RAG")
-    st.markdown("Implementación Hexagonal con Evaluación Local (Ollama + Ragas).")
+    st.markdown("Implementación Hexagonal con Evaluación (Gemini + Ragas).")
 
     # Obtener el servicio (Singleton)
     rag_service = get_vector_service()
@@ -206,46 +218,55 @@ def main():
 
     # --- TAB 2: BENCHMARK ---
     with tab2:
-        st.subheader("Evaluación con Ragas (Local)")
-        st.markdown(f"Usando dataset: `{DATASET_PATH}` y modelo local.")
+        st.subheader("Evaluación con Ragas")
+        st.markdown(f"Usando dataset: `{DATASET_PATH}` y modelo **Gemini 2.0 Flash**.")
 
         if st.button("🚀 Ejecutar Benchmark Real"):
             evaluator = BaselineEvaluator(rag_service)
             
             with st.spinner("Ejecutando evaluación..."):
-                df_res, metrics_obj = evaluator.run_benchmark()
-            
-            if isinstance(df_res, str): # Manejo de errores
-                st.error(df_res)
-            else:
-                st.success("¡Evaluación Completada!")
-                
-                # 1. Calcular promedios de las métricas de retrieval
-                precision_score = df_res["context_precision"].mean()
-                recall_score = df_res["context_recall"].mean()
+                try:
+                    df_res, metrics_obj = evaluator.run_benchmark()
+                    
+                    if isinstance(df_res, str): # Manejo de errores
+                        st.error(df_res)
+                    else:
+                        st.success("¡Evaluación Completada!")
+                        
+                        # 1. Calcular promedios de las métricas de retrieval
+                        precision_score = df_res["context_precision"].mean()
+                        recall_score = df_res["context_recall"].mean()
 
-                col1, col2 = st.columns(2)
-                col1.metric("Context Precision", f"{precision_score:.4f}")
-                col2.metric("Context Recall", f"{recall_score:.4f}")
+                        col1, col2 = st.columns(2)
+                        col1.metric("Context Precision", f"{precision_score:.4f}")
+                        col2.metric("Context Recall", f"{recall_score:.4f}")
 
-                # 2. Mostrar tabla con columnas relevantes
-                target_cols = [
-                    'user_input', 'retrieved_contexts', 'response', 'reference',
-       'context_precision', 'context_recall'
-                ]
+                        # 2. Mostrar tabla con columnas relevantes
+                        target_cols = [
+   
+                            "user_input",
+                            "retrieved_contexts",
+                            "context_recall",
+                            "context_precision",
+                            'response', 'reference'
+                           
+        
+                        ]
+                        print(df_res.columns)
+                        final_cols = [c for c in target_cols if c in df_res.columns]
 
-                final_cols = [c for c in target_cols if c in df_res.columns]
-
-                st.dataframe(df_res[final_cols], use_container_width=True)
-                
-                # 3. Botón de descarga
-                csv = df_res.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    "💾 Descargar Resultados CSV",
-                    csv,
-                    "ragas_results.csv",
-                    "text/csv",
-                )
+                        st.dataframe(df_res[final_cols], use_container_width=True)
+                        
+                        # 3. Botón de descarga
+                        csv = df_res.to_csv(index=False).encode("utf-8")
+                        st.download_button(
+                            "💾 Descargar Resultados CSV",
+                            csv,
+                            "ragas_results.csv",
+                            "text/csv",
+                        )
+                except Exception as e:
+                    st.error(f"Ocurrió un error: {e}")
 
 if __name__ == "__main__":
     main()

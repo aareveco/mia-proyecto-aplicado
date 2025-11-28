@@ -1,3 +1,4 @@
+# src/infrastructure/loaders/pdf_loader.py
 from typing import List
 from src.domain.models import ProcessedChunk
 from src.application.ports.loader_port import AbstractLoader

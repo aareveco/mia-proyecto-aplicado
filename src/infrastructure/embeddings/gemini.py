@@ -1,3 +1,4 @@
+# src/infrastructure/embeddings/gemini.py
 
 from google import genai
 import numpy as np
