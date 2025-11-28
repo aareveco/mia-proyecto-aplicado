@@ -2,23 +2,13 @@
 import os
 import time
 import pandas as pd
-import asyncio
 import streamlit as st
 from dotenv import load_dotenv
 
-# --- CHANGED: Removed HuggingFaceEmbedder, Added GeminiFactory ---
-# from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
-from src.infrastructure.llm.gemini_factory import GeminiFactory
-from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
-from src.application.services.rag_service import VectorStoreService, run_indexing_service, run_retrieval_service
-
-# --- REMOVED: LocalResourcesFactory is no longer needed if using Gemini ---
-# from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
-
-from datasets import Dataset
-from ragas import evaluate
-from ragas.metrics import context_precision, context_recall
-from ragas.run_config import RunConfig
+from src.infrastructure.services.service_factory import ServiceFactory
+from src.application.services.rag_service import VectorStoreService, run_retrieval_service
+from src.application.services.evaluation_service import EvaluationService
+from src.application.services.indexing_service import BatchIndexingService
 
 # Cargar variables de entorno
 load_dotenv()
@@ -38,116 +28,12 @@ st.set_page_config(page_title="Hito 1: Clean RAG Architecture", layout="wide")
 @st.cache_resource
 def get_vector_service() -> VectorStoreService:
     """
-    Instancia los adaptadores y el servicio de aplicación.
-    Usa persistencia en disco para compartir datos con los scripts.
+    Instancia los adaptadores y el servicio de aplicación usando la Factory.
     """
-    # --- CHANGED: Use Gemini Embedder to match run_eval.py ---
-    # embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
-    embedder = GeminiFactory.get_app_embedder(model_name="models/text-embedding-004")
-    
-    # 2. Adaptador de Base de Datos Vectorial (CON PERSISTENCIA)
-    db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
-    
-    # 3. Inyección de dependencias
-    service = VectorStoreService(embedder=embedder, db_impl=db_impl)
-    return service
+    return ServiceFactory.get_vector_service(QDRANT_PATH)
 
 # ==============================================================================
-# 2. SISTEMA DE BENCHMARK REAL
-# ==============================================================================
-
-class BaselineEvaluator:
-    """
-    Evaluador real usando Ragas y Gemini (Mirroring run_eval.py).
-    """
-    def __init__(self, rag_service: VectorStoreService):
-        self.rag_service = rag_service
-
-    def run_benchmark(self):
-        # 1. Verificar Dataset
-        if not os.path.exists(DATASET_PATH):
-            return None, "❌ No se encontró 'datasets/golden_dataset.csv'. Ejecuta primero 'scripts/generate_dataset.py'."
-
-        # 2. Cargar Dataset
-        df = pd.read_csv(DATASET_PATH)
-        
-        # Validar columnas necesarias
-        if "user_input" not in df.columns or "reference" not in df.columns:
-            return None, "❌ El CSV debe tener columnas 'user_input' y 'reference'."
-
-        questions = df["user_input"].tolist()
-        ground_truths = df["reference"].tolist()
-        
-        answers = []
-        contexts = []
-
-        # 3. Correr Inferencia (Retrieval)
-        progress_bar = st.progress(0)
-        status = st.empty()
-        
-        total = len(questions)
-        for i, q in enumerate(questions):
-            status.text(f"Evaluando consulta {i+1}/{total}: {q[:50]}...")
-            
-            # Llamada al servicio RAG
-            results = run_retrieval_service(q, self.rag_service, top_k=3)
-            
-            # Preparar contexto para Ragas (lista de strings)
-            retrieved_text = [c.content for c in results]
-            
-            # "Respuesta" = top-1 chunk, solo para cumplir schema
-            generated_answer = results[0].content if results else "No information found."
-            
-            answers.append(generated_answer)
-            contexts.append(retrieved_text)
-            progress_bar.progress((i + 1) / total)
-
-        # 4. Preparar Dataset Ragas (igual que run_eval.py)
-        eval_data = {
-            "question": questions,
-            "answer": answers,
-            "contexts": contexts,
-            "ground_truth": ground_truths,
-
-            
-        }
-        eval_dataset = Dataset.from_dict(eval_data)
-
-        # 5. Configurar LLM para Evaluación (Judge)
-        status.text("Calculando métricas con Ragas (usando Gemini)...")
-        
-        # --- CHANGED: Use Gemini for Evaluation Judge instead of LocalResourcesFactory ---
-        # llm = LocalResourcesFactory.get_generator_llm("qwen2.5:1.5b")
-        # embeddings = LocalResourcesFactory.get_embeddings()
-        
-        llm = GeminiFactory.get_generator_llm("gemini-2.0-flash")
-        embeddings = GeminiFactory.get_embeddings()
-
-        # RunConfig para evitar TimeoutError
-        run_config = RunConfig(
-            timeout=120,     
-            max_workers=2,   
-            max_retries=2,
-        )
-
-        # 6. Ejecutar Ragas con métricas de retrieval
-        result = evaluate(
-            eval_dataset,
-            metrics=[context_precision, context_recall],
-            llm=llm,
-            embeddings=embeddings,
-            run_config=run_config,
-            # raise_exceptions=False, 
-        )
-
-        progress_bar.empty()
-        
-        # Retornar DataFrame de resultados y objeto Ragas
-        return result.to_pandas(), result
-
-
-# ==============================================================================
-# 3. INTERFAZ GRÁFICA
+# 2. INTERFAZ GRÁFICA
 # ==============================================================================
 
 def main():
@@ -168,17 +54,23 @@ def main():
             if not os.path.exists(data_folder):
                 st.error(f"La carpeta '{data_folder}' no existe.")
             else:
-                files = [f for f in os.listdir(data_folder) if f.endswith(".pdf")]
-                if not files:
-                    st.warning("No hay PDFs.")
-                else:
-                    bar = st.progress(0)
-                    for i, f in enumerate(files):
-                        run_indexing_service(os.path.join(data_folder, f), rag_service)
-                        bar.progress((i+1)/len(files))
-                    st.success("¡Indexado Completo!")
-                    time.sleep(1)
-                    st.rerun()
+                # Use IndexingService
+                indexing_service = BatchIndexingService(rag_service) # No quarantine in UI for now, or maybe? App didn't have it before.
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                def update_progress(idx, total, fname):
+                     progress_bar.progress((idx) / total)
+                     status_text.text(f"Indexing: {fname}")
+
+                indexing_service.index_directory(data_folder, on_progress=update_progress)
+
+                progress_bar.progress(1.0)
+                status_text.text("Done!")
+                st.success("¡Indexado Completo!")
+                time.sleep(1)
+                st.rerun()
 
         st.divider()
         top_k = st.slider("Top-K Recuperados", 1, 10, 3)
@@ -222,16 +114,30 @@ def main():
         st.markdown(f"Usando dataset: `{DATASET_PATH}` y modelo **Gemini 2.0 Flash**.")
 
         if st.button("🚀 Ejecutar Benchmark Real"):
-            evaluator = BaselineEvaluator(rag_service)
             
+            llm, embeddings = ServiceFactory.get_evaluation_components()
+            evaluator = EvaluationService(rag_service, llm, embeddings)
+
+            # Progress UI
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            def update_eval_progress(idx, total, msg):
+                if total > 0:
+                    progress_bar.progress(idx / total)
+                status_text.text(msg)
+
             with st.spinner("Ejecutando evaluación..."):
                 try:
-                    df_res, metrics_obj = evaluator.run_benchmark()
+                    df_res, metrics_obj = evaluator.run_benchmark(DATASET_PATH, on_progress=update_eval_progress)
                     
-                    if isinstance(df_res, str): # Manejo de errores
-                        st.error(df_res)
+                    if df_res is None:
+                         # metrics_obj holds the error message in this case per my implementation of run_benchmark
+                         st.error(metrics_obj)
                     else:
                         st.success("¡Evaluación Completada!")
+                        progress_bar.empty()
+                        status_text.empty()
                         
                         # 1. Calcular promedios de las métricas de retrieval
                         precision_score = df_res["context_precision"].mean()
@@ -243,17 +149,31 @@ def main():
 
                         # 2. Mostrar tabla con columnas relevantes
                         target_cols = [
-   
                             "user_input",
                             "retrieved_contexts",
                             "context_recall",
                             "context_precision",
                             'response', 'reference'
-                           
-        
                         ]
-                        print(df_res.columns)
-                        final_cols = [c for c in target_cols if c in df_res.columns]
+
+                        # Note: 'response' might not be in df_res if Ragas names it 'answer'. 'reference' is 'ground_truth'.
+                        # Let's adjust target_cols based on Ragas standard output or what we injected.
+                        # In EvaluationService we mapped: "question", "answer", "contexts", "ground_truth".
+                        # Ragas adds metrics columns.
+
+                        # Let's see what columns are actually there.
+                        # Ragas typically returns 'question', 'contexts', 'answer', 'ground_truth', 'context_precision', 'context_recall'.
+
+                        # Adjust target cols to match what we likely have
+                        possible_cols = [
+                            "question", "user_input",
+                            "contexts", "retrieved_contexts",
+                            "answer", "response",
+                            "ground_truth", "reference",
+                            "context_recall", "context_precision"
+                        ]
+
+                        final_cols = [c for c in possible_cols if c in df_res.columns]
 
                         st.dataframe(df_res[final_cols], use_container_width=True)
                         
