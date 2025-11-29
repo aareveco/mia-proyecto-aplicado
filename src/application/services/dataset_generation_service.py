@@ -44,6 +44,12 @@ class DatasetGenerationService:
                     print(f"   ⚠️ No chunks found for {file_path}. Skipping.")
                     continue
 
+                # LIMIT CHUNKS FOR MVP (Speed up generation)
+                max_chunks = 5
+                if len(chunks) > max_chunks:
+                    print(f"   [MVP] Limiting to first {max_chunks} chunks (of {len(chunks)})")
+                    chunks = chunks[:max_chunks]
+
                 # Adapter: ProcessedChunk -> LangChain Document
                 docs = [
                     Document(page_content=c.content, metadata=c.metadata) 

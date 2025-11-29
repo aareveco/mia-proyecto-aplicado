@@ -6,7 +6,8 @@ from src.domain.models import ProcessedChunk
 
 class VectorStoreImpl(ABC):
     @abstractmethod
-    def index_data(self, vectors: np.ndarray, metadatas: List[Dict]) -> None:
+    @abstractmethod
+    def index_data(self, vectors: np.ndarray, metadatas: List[Dict], overwrite: bool = False) -> None:
         pass
 
     @abstractmethod

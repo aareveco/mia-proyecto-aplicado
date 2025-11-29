@@ -13,7 +13,7 @@ class VectorStoreService:
         self._embedder = embedder
         self._db_impl = db_impl
 
-    def index_chunks(self, chunks: List[ProcessedChunk]) -> None:
+    def index_chunks(self, chunks: List[ProcessedChunk], overwrite: bool = False) -> None:
         vectors = self._embedder.embed_chunks(chunks)
 
         # Guardamos el embedding en cada chunk (opcional)
@@ -21,7 +21,7 @@ class VectorStoreService:
             chunk.dense_vector = vec.tolist()
 
         metadatas = [c.model_dump() for c in chunks]
-        self._db_impl.index_data(vectors, metadatas)
+        self._db_impl.index_data(vectors, metadatas, overwrite=overwrite)
 
     def query(self, query_text: str, top_k: int = 5) -> List[ProcessedChunk]:
         """
@@ -41,6 +41,7 @@ class VectorStoreService:
 def run_indexing_service(
     file_path: str,
     vector_store: VectorStoreService,
+    overwrite: bool = False,
 ) -> None:
     """
     Orquesta el proceso de indexación de un documento en el RAG.
@@ -49,7 +50,7 @@ def run_indexing_service(
     chunks = loader.load_and_chunk(file_path)
 
     print("[Index] Generando embeddings e indexando en Qdrant...")
-    vector_store.index_chunks(chunks)
+    vector_store.index_chunks(chunks, overwrite=overwrite)
     print("[Index] Listo.")
 
 

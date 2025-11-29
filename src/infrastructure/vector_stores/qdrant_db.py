@@ -49,11 +49,23 @@ class QdrantImpl(VectorStoreImpl):
         self._collection_created = True
         print(f"[Qdrant] Colección '{self.collection_name}' creada con dim={vector_size}")
 
-    def index_data(self, vectors: np.ndarray, metadata: List[Dict]) -> None:
+    def index_data(self, vectors: np.ndarray, metadata: List[Dict], overwrite: bool = False) -> None:
         if len(vectors) == 0:
             return
 
-        self._ensure_collection(vector_size=vectors.shape[1])
+        if overwrite:
+            print(f"[Qdrant] Overwrite=True. Recreando colección '{self.collection_name}'...")
+            self.client.recreate_collection(
+                collection_name=self.collection_name,
+                vectors_config=VectorParams(
+                    size=vectors.shape[1],
+                    distance=Distance.COSINE,
+                ),
+            )
+            self._collection_created = True
+            self._next_id = 1
+        else:
+            self._ensure_collection(vector_size=vectors.shape[1])
 
         points = []
         for vec, meta in zip(vectors, metadata):
