@@ -43,6 +43,7 @@ def get_vector_service() -> VectorStoreService:
     db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
     
     # 3. Inyección de dependencias
+    # Force cache invalidation for overwrite flag update
     service = VectorStoreService(embedder=embedder, db_impl=db_impl)
     return service
 
@@ -65,12 +66,12 @@ class BaselineEvaluator:
         # 2. Cargar Dataset
         df = pd.read_csv(DATASET_PATH)
         
-        # Validar columnas necesarias
-        if "user_input" not in df.columns or "reference" not in df.columns:
-            return None, "❌ El CSV debe tener columnas 'user_input' y 'reference'."
 
-        questions = df["user_input"].tolist()
-        ground_truths = df["reference"].tolist()
+        if "question" not in df.columns or "ground_truth" not in df.columns:
+            return None, "❌ El CSV debe tener columnas 'question' y 'ground_truth'."
+
+        questions = df["question"].tolist()
+        ground_truths = df["reference_contexts"].tolist() #por ahora usamos esto dado que no tenemos la patrte de Generación
         
         answers = []
         contexts = []
@@ -162,7 +163,7 @@ def main():
                 else:
                     bar = st.progress(0)
                     for i, f in enumerate(files):
-                        run_indexing_service(os.path.join(data_folder, f), rag_service)
+                        run_indexing_service(os.path.join(data_folder, f), rag_service, overwrite=True)
                         bar.progress((i+1)/len(files))
                     st.success("¡Indexado Completo!")
                     time.sleep(1)
@@ -221,8 +222,17 @@ def main():
                 st.success("¡Evaluación Completada!")
                 
                 # 1. Calcular promedios de las métricas de retrieval
-                precision_score = df_res["context_precision"].mean()
-                recall_score = df_res["context_recall"].mean()
+                if "context_precision" in df_res.columns:
+                    precision_score = df_res["context_precision"].mean()
+                else:
+                    precision_score = 0.0
+                    st.warning("⚠️ 'context_precision' no se calculó correctamente.")
+
+                if "context_recall" in df_res.columns:
+                    recall_score = df_res["context_recall"].mean()
+                else:
+                    recall_score = 0.0
+                    st.warning("⚠️ 'context_recall' no se calculó correctamente.")
 
                 col1, col2 = st.columns(2)
                 col1.metric("Context Precision", f"{precision_score:.4f}")
@@ -230,10 +240,10 @@ def main():
 
                 # 2. Mostrar tabla con columnas relevantes
                 target_cols = [
-                    'user_input', 'retrieved_contexts', 'response', 'reference',
+                    'question', 'contexts', 'answer', 'ground_truth',
        'context_precision', 'context_recall'
                 ]
-
+                print(df_res.columns)
                 final_cols = [c for c in target_cols if c in df_res.columns]
 
                 st.dataframe(df_res[final_cols], use_container_width=True)
