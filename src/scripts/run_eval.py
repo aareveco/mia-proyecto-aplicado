@@ -51,8 +51,8 @@ async def main():
     #   - reference   -> ground truth
     #
     # (Generadas por tu RagasLocalGenerator)
-    questions = df["user_input"].tolist()
-    ground_truths = df["reference"].tolist()
+    questions = df["question"].tolist()
+    ground_truths = df["reference_contexts"].tolist()
 
     answers = []
     contexts = []

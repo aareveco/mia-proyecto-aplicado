@@ -67,7 +67,7 @@ class RagasLocalGenerator:
             # Menos headlines para no matar al modelo local
             HeadlinesExtractor(llm=self.llm, max_num=5),
             # Menos tokens por chunk para manejo de memoria
-            HeadlineSplitter(max_tokens=500),
+            HeadlineSplitter(max_tokens=50),
             KeyphrasesExtractor(llm=self.llm),
         ]
 
@@ -125,16 +125,7 @@ class RagasLocalGenerator:
 
         df = testset.to_pandas()
 
-        # En este punto, el DataFrame suele tener como mínimo:
-        #   - user_input
-        #   - reference
-        #   - reference_contexts
-        #   - synthesizer_name
-        #
-        # Para tu pipeline de evaluación usaremos:
-        #   user_input -> question
-        #   reference  -> ground_truth
-        # Y los contexts los obtendremos en tiempo de evaluación desde el RAG.
+
         return df
 
     def generate_testset(
