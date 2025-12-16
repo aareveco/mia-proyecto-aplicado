@@ -24,3 +24,9 @@ class ProcessedChunk(BaseModel):
     sparse_vector: List[float] | None = None
 
 
+class FilterSuggestion(BaseModel):
+    """
+    Contrato pydantic para el output de query processing
+    """
+    rewritten_query: str
+    metadata_filters: Dict[str, Any] = Field(default_factory=dict)
