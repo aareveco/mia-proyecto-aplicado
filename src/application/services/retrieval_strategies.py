@@ -27,40 +27,7 @@ class DenseRetriever(RetrievalStrategy):
         return [ProcessedChunk(**r) for r in results_dict]
 
 
-class QdrantHybridStrategy(RetrievalStrategy):
-    """
-    Realiza búsqueda híbrida (Dense + Sparse) usando los métodos nativos de Qdrant.
-    """
-    def __init__(self, vector_store: VectorStoreImpl, embedder: AbstractEmbedder, sparse_encoder: Any):
-        # Note: sparse_encoder type hint is Any to avoid circular imports if not careful, 
-        # but logically it is the SparseEncoder port.
-        self.vector_store = vector_store
-        self.embedder = embedder
-        self.sparse_encoder = sparse_encoder 
 
-    def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
-        # 1. Embed dense
-        query_chunk = ProcessedChunk(content=query)
-        # Assuming embedder returns np.ndarray of shape (1, dim)
-        query_dense = self.embedder.embed_chunks([query_chunk])[0]
-        
-        # 2. Embed sparse
-        # Use the formal port interface 'encode'
-        try:
-             query_sparse = self.sparse_encoder.encode(query)
-        except AttributeError:
-             print("[HybridStrategy] Warning: Sparse encoder does not implement 'encode'. Fallback to empty.")
-             query_sparse = {"indices": [], "values": []}
-
-        # 3. Hybrid Query in Qdrant
-        # We need to cast vector_store to QdrantImpl to access query_hybrid (not part of generic interface yet, or we assume it is)
-        if hasattr(self.vector_store, "query_hybrid"):
-            results_dict = self.vector_store.query_hybrid(query_dense, query_sparse, top_k=top_k, filters=filters)
-        else:
-            print("[HybridStrategy] Warning: Vector store does not support query_hybrid. Fallback to dense.")
-            results_dict = self.vector_store.query_data(query_dense, top_k=top_k, filters=filters)
-            
-        return [ProcessedChunk(**r) for r in results_dict]
 
 
 class PubChemRetriever(RetrievalStrategy):

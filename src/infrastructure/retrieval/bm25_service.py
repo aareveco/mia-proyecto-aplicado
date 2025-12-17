@@ -4,14 +4,12 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple, Any
 from rank_bm25 import BM25Okapi
 from src.application.ports.vector_store_port import RetrievalStrategy
-from src.application.ports.sparse_encoder_port import SparseEncoder
 from src.domain.models import ProcessedChunk
 
-class BM25Service(RetrievalStrategy, SparseEncoder):
+class BM25Service(RetrievalStrategy):
     """
-    Unified BM25 Service for both sparse vector generation (indexing) 
-    and context retrieval (search).
-    Implements RetrievalStrategy and SparseEncoder.
+    Local BM25 Service for keyword retrieval (In-Memory).
+    Implements RetrievalStrategy.
     """
     def __init__(self, storage_path: str = "bm25_index.pkl"):
         self.storage_path = storage_path
@@ -81,19 +79,6 @@ class BM25Service(RetrievalStrategy, SparseEncoder):
         
         print(f"[BM25] Retrieved {len(results)} chunks for query: '{query}'")
         return results
-
-    def encode(self, text: str) -> Dict[str, Any]:
-        """
-        Generates a sparse vector for a given text using the current BM25 statistics.
-        Returns format suitable for Qdrant: {"indices": [...], "values": [...]}
-        """
-        if self.bm25_index is None:
-            return {"indices": [], "values": []}
-        
-        # rank_bm25 does not support sparse vector export for Qdrant (which requires integer indices mapped to a fixed vocab).
-        # We return empty vectors here to avoid pipeline errors, while the actual retrieval relies on the internal 
-        # python-side BM25 index via `retrieve_context`.
-        return {"indices": [], "values": []}
 
     def _tokenize(self, text: str) -> List[str]:
         return text.lower().split()

@@ -2,7 +2,7 @@ from typing import Optional
 import os
 from src.application.services.ingestion_pipeline import IngestionPipeline
 from src.infrastructure.processors.processors import CleanerProcessor, MetadataExtractorProcessor
-from src.infrastructure.processors.sparse_processor import SparseEmbeddingProcessor
+
 from src.infrastructure.loaders.factory import DocumentLoaderFactory
 from src.application.services.rag_service import VectorStoreService
 
@@ -22,15 +22,12 @@ class IngestionService:
         chunks = loader.load_and_chunk(file_path)
         
         # --- PIPELINE STEP ---
-        # Injecting SparseEmbeddingProcessor using the adapter from service
-        # NOTE: We cast to SparseEncoder if needed, or assume the service port works.
         pipeline = IngestionPipeline([
             CleanerProcessor(),
-            MetadataExtractorProcessor(),
-            SparseEmbeddingProcessor(service=self.vector_store.sparse_retriever)
+            MetadataExtractorProcessor()
         ])
         
-        print(f"[IngestionService] Running Pipeline (Cleaner + Extractor + Sparse) on {len(chunks)} chunks...")
+        print(f"[IngestionService] Running Pipeline (Cleaner + Extractor) on {len(chunks)} chunks...")
         refined_chunks = pipeline.run(chunks)
         # ---------------------
 

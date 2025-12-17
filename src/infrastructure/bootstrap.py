@@ -10,7 +10,8 @@ from src.infrastructure.adapters.pubchem_adapter import PubChemAdapter
 def create_rag_service(
     qdrant_path: str,
     qdrant_collection: str = "rag_chunks",
-    enable_pubchem: bool = False
+    enable_pubchem: bool = False,
+    bm25_path: str = "bm25_index.pkl"
 ) -> VectorStoreService:
     """
     Factory function to create a fully configured VectorStoreService.
@@ -35,7 +36,7 @@ def create_rag_service(
     
     # 4. Sparse Embedding / Retrieval (Unified)
     from src.infrastructure.retrieval.bm25_service import BM25Service
-    bm25_service = BM25Service()
+    bm25_service = BM25Service(storage_path=bm25_path)
     
     # 5. Optional Services
     pubchem_service = None
@@ -44,14 +45,13 @@ def create_rag_service(
         pubchem_service = PubChemAdapter()
 
     # 6. Service Injection
-    # We pass bm25_adapter as the sparse_retriever argument because the service 
-    # will use it for both indexing (embedding) and retrieval (hybrid strategy construction)
+    # We pass bm25_service as the keyword_retriever argument for Federated Hybrid Search
     service = VectorStoreService(
         embedder=embedder, 
         db_impl=db_impl,
         llm_service=llm_service,
         reranker_service=reranker_service,
-        sparse_retriever=bm25_service, 
+        keyword_retriever=bm25_service, 
         pubchem_service=pubchem_service
     )
     

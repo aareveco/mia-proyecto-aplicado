@@ -34,35 +34,32 @@ class VectorStoreService:
         db_impl: VectorStoreImpl,
         llm_service: LLMService,
         reranker_service: RerankerService,
-        sparse_retriever: Any, # Should implement RetrievalStrategy AND SparseEncoder
+        keyword_retriever: RetrievalStrategy, # Injected BM25Service
         pubchem_service: Optional[PubChemService] = None, 
-        # Optional: Allow overriding the composition logic or strategies if needed, 
-        # but for now we compose them here using the injected components.
     ):
         self._embedder = embedder
         self._db_impl = db_impl
         self.llm_service = llm_service
         self.reranker_service = reranker_service
-        self.sparse_retriever = sparse_retriever
+        self.keyword_retriever = keyword_retriever
         self.pubchem_service = pubchem_service
         
         # Build Retrieval Chain
         
         # 1. Retrieval Strategies
-        # using the injected sparse_retriever (BM25Adapter) as the sparse encoder
-        from src.application.services.retrieval_strategies import QdrantHybridStrategy, DenseRetriever
+        from src.application.services.retrieval_strategies import DenseRetriever, FederatedRetriever
         
-        # A. Hybrid (Dense + Sparse)
-        self.hybrid_strategy = QdrantHybridStrategy(
-            vector_store=self._db_impl,
-            embedder=self._embedder,
-            sparse_encoder=self.sparse_retriever
-        )
-        
-        # B. Dense Only (Semantic)
+        # A. Dense Only (Semantic)
         self.dense_strategy = DenseRetriever(
             vector_store=self._db_impl,
             embedder=self._embedder
+        )
+
+        # B. Hybrid (Federated: Dense + Keyword)
+        # We combine the semantic search (Dense) with the keyword search (BM25)
+        # using Reciprocal Rank Fusion via FederatedRetriever.
+        self.hybrid_strategy = FederatedRetriever(
+            strategies=[self.dense_strategy, self.keyword_retriever]
         )
         
         # C. PubChem (if enabled)
@@ -72,10 +69,24 @@ class VectorStoreService:
             self.pubchem_retriever = PubChemRetriever(self.pubchem_service)
             
         # Default Federated (Hybrid + PubChem) for backward compatibility
+        # If PubChem involves, we add it to the hybrid mix
         strategies = [self.hybrid_strategy]
         if self.pubchem_retriever:
              strategies.append(self.pubchem_retriever)
-        self.federated_strategy = FederatedRetriever(strategies)
+        
+        # Refined hierarchy: Top federator merges Hybrid (Dense+Keyword) with PubChem
+        # But FederatedRetriever flattens lists, so passing [Hybrid(Federated), PubChem] works if RRF handles it 
+        # recursively or we just pass flat list of [Dense, Keyword, PubChem]
+        # Let's keep it simple: The main strategy is Federated(Hybrid, PubChem)
+        # But wait, hybrid IS Federated([Dense, Keyword]). 
+        # So we can just make one big FederatedRetriever([Dense, Keyword, PubChem])?
+        # Yes, that's cleaner for RRF.
+        
+        federation_components = [self.dense_strategy, self.keyword_retriever]
+        if self.pubchem_retriever:
+            federation_components.append(self.pubchem_retriever)
+            
+        self.federated_strategy = FederatedRetriever(federation_components)
         
         # 3. Query Optimization
         self.query_processor = QueryRewritingStrategy(self.llm_service)
@@ -122,13 +133,12 @@ class VectorStoreService:
         metadatas = [c.model_dump() for c in chunks]
         self._db_impl.index_data(vectors, metadatas, overwrite=overwrite)
         
-        # Index in Sparse Retriever (if it supports indexing interface)
-        # Assuming sparse_retriever has index_documents method (it might need a separate Port definition for Indexing vs Retrieval)
-        # For now, we assume it's the BM25RetrieverImpl which has it.
-        # In a strict port sense, we should have an Indexable interface.
-        if hasattr(self.sparse_retriever, "index_documents"):
-            print("[Service] Indexing in Sparse Retriever...")
-            self.sparse_retriever.index_documents(chunks, overwrite=overwrite)
+        # Index in Keyword Retriever (BM25)
+        # We explicitly rely on the fact that injected keyword_retriever is BM25Service
+        # or supports index_documents.
+        if hasattr(self.keyword_retriever, "index_documents"):
+            print("[Service] Indexing in Keyword Retriever (BM25)...")
+            self.keyword_retriever.index_documents(chunks, overwrite=overwrite)
 
     def query(self, query_text: str, top_k: int = 5) -> List[ProcessedChunk]:
         """
