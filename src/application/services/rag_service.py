@@ -15,28 +15,13 @@ from src.application.services.retrieval_strategies import (
     PubChemRetriever,
     QueryOptimizerRetriever,
     RerankingDecorator,
-    ContextRepackerDecorator
+    ContextRepackerDecorator,
+    VectorRetrievalStrategy
 )
 from src.application.services.generation_service import AugmentedGenerator
 
 
-class VectorRetrievalStrategy(RetrievalStrategy):
-    """
-    Simple adapter to use VectorStoreImpl as a RetrievalStrategy.
-    """
-    def __init__(self, vector_store: VectorStoreImpl, embedder: AbstractEmbedder):
-        self.vector_store = vector_store
-        self.embedder = embedder
 
-    def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
-        # Embed query
-        query_chunk = ProcessedChunk(content=query)
-        # Note: embed_chunks usually expects list
-        query_vector = self.embedder.embed_chunks([query_chunk])[0]
-        
-        # Query DB
-        results_dict = self.vector_store.query_data(query_vector, top_k=top_k, filters=filters)
-        return [ProcessedChunk(**r) for r in results_dict]
 
 
 class VectorStoreService:
@@ -125,23 +110,5 @@ class VectorStoreService:
         return self.generator.generate_answer(query, context)
 
 
-def run_retrieval_service(
-    query: str,
-    vector_store: VectorStoreService,
-    top_k: int = 5,
-) -> List[ProcessedChunk]:
-    print(f"[Retrieval] Ejecutando búsqueda avanzada para: {query!r}")
-    results = vector_store.query(query, top_k=top_k)
-    return results
 
-# run_indexing_service helper might interact with DocumentLoaderFactory which is infrastructure.
-# To fail safely, we can keep it here IF we import factory ONLY inside the function, 
-# or better, move this helper to a script or the infrastructure layer. 
-# But let's check imports. loading factory is infra.
-# So this function logically belongs to a higher level (like a CLI or Orchestrator in Infra), not Domain/App services.
-# However, for now, to avoid breaking too much, I will remove the Import from top level and import locally, 
-# OR move it to app.py/scripts. 
-# Best Clean Code practice: Move `run_indexing_service` to `app.py` or a dedicated `pipeline_runner.py` in infra.
-# I will REMOVE it from here to enforce separation. 
-# Note: app.py used it. I will move it to app.py.
 

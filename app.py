@@ -7,12 +7,9 @@ from dotenv import load_dotenv
 
 from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
 from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
-from src.application.services.rag_service import VectorStoreService, run_retrieval_service
+from src.application.services.rag_service import VectorStoreService
 from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
-# Infrastructure Imports for Injection
-from src.infrastructure.llm.local_llm_service import LocalLLMService
-from src.infrastructure.reranker.cross_encoder_reranker import CrossEncoderRerankerService
-from src.infrastructure.retrieval.bm25_service import BM25RetrieverImpl
+from src.infrastructure.bootstrap import create_rag_service
 from src.infrastructure.loaders.factory import DocumentLoaderFactory
 
 from datasets import Dataset
@@ -69,27 +66,7 @@ def get_vector_service() -> VectorStoreService:
     Instancia los adaptadores y el servicio de aplicación.
     Usa persistencia en disco para compartir datos con los scripts.
     """
-    # 1. Adaptador de Embeddings
-    embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
-    
-    # 2. Adaptador de Base de Datos Vectorial (CON PERSISTENCIA)
-    db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
-    
-    # 3. New Infrastructure Services
-    llm_service = LocalLLMService()
-    reranker_service = CrossEncoderRerankerService()
-    bm25_service = BM25RetrieverImpl(storage_path="data/bm25_index.pkl")
-
-    # 4. Inyección de dependencias
-    # Force cache invalidation for overwrite flag update
-    service = VectorStoreService(
-        embedder=embedder, 
-        db_impl=db_impl,
-        llm_service=llm_service,
-        reranker_service=reranker_service,
-        sparse_retriever=bm25_service
-    )
-    return service
+    return create_rag_service(qdrant_path=QDRANT_PATH)
 
 # ==============================================================================
 # 2. SISTEMA DE BENCHMARK REAL
@@ -129,7 +106,7 @@ class BaselineEvaluator:
             status.text(f"Evaluando consulta {i+1}/{total}: {q[:50]}...")
             
             # Llamada al servicio RAG
-            results = run_retrieval_service(q, self.rag_service, top_k=3)
+            results = self.rag_service.query(q, top_k=3)
             
             # Preparar contexto para Ragas (lista de strings)
             retrieved_text = [c.content for c in results]
@@ -226,7 +203,7 @@ def main():
 
         if query:
             start_time = time.time()
-            results = run_retrieval_service(query, rag_service, top_k=top_k)
+            results = rag_service.query(query, top_k=top_k)
             end_time = time.time()
 
             st.markdown(f"**Resultados:** {len(results)} chunks en {end_time - start_time:.3f}s")

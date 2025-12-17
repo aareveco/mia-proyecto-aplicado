@@ -1,10 +1,30 @@
 from typing import List, Dict, Any
 from collections import defaultdict
 from src.application.ports.vector_store_port import VectorStoreImpl, RetrievalStrategy
+from src.application.ports.embedder_port import AbstractEmbedder
 from src.application.ports.reranker_port import RerankerService
 from src.application.services.query_processing import QueryProcessingStrategy
 from src.domain.models import ProcessedChunk
 from src.application.ports.pubchem_port import PubChemService
+
+class VectorRetrievalStrategy(RetrievalStrategy):
+    """
+    Simple adapter to use VectorStoreImpl as a RetrievalStrategy.
+    """
+    def __init__(self, vector_store: VectorStoreImpl, embedder: AbstractEmbedder):
+        self.vector_store = vector_store
+        self.embedder = embedder
+
+    def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
+        # Embed query
+        query_chunk = ProcessedChunk(content=query)
+        # Note: embed_chunks usually expects list
+        query_vector = self.embedder.embed_chunks([query_chunk])[0]
+        
+        # Query DB
+        results_dict = self.vector_store.query_data(query_vector, top_k=top_k, filters=filters)
+        return [ProcessedChunk(**r) for r in results_dict]
+
 
 class PubChemRetriever(RetrievalStrategy):
     """
@@ -86,29 +106,7 @@ def reciprocal_rank_fusion(results_lists: List[List[ProcessedChunk]], k=60) -> L
 
     return final_results
 
-class HybridSearchRetriever(RetrievalStrategy):
-    """
-    Combines Dense (Vector) and Sparse (Keyword) search using RRF.
-    """
-    def __init__(self, vector_store: VectorStoreImpl, sparse_retriever: RetrievalStrategy = None):
-        self.vector_store = vector_store
-        self.sparse_retriever = sparse_retriever # Can be None if strictly Dense for now, or a simple keyword matcher
 
-    def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
-        # 1. Dense Search
-        # VectorStoreImpl.query_data takes vector, but here we have text 'query'.
-        # We need to embed the query first? 
-        # Wait, VectorStoreImpl.query_data takes 'query_vector: np.ndarray'.
-        # The 'RetrievalStrategy' interface takes 'query: str'.
-        # So this class needs the embedder too (or the vector_store adapter handles embedding).
-        # In 'rag_service.py', VectorStoreService handles embedding then calls db_impl.
-        # So 'HybridSearchRetriever' should rely on a component that can return chunks from query string.
-        # Let's assume 'vector_store' passed here is actually a 'RetrievalStrategy' wrapping the dense part?
-        # Or we act as the orchestrator and we need the embedder.
-        
-        # To follow Clean Architecture, let's assume we pass two 'RetrievalStrategy' objects:
-        # dense_strategy and sparse_strategy.
-        pass
 
 class FederatedRetriever(RetrievalStrategy):
     """
