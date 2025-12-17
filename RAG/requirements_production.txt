@@ -1,0 +1,37 @@
+# ============================================
+# RAG PRODUCTION - Dependencias Completas
+# ============================================
+
+# Documentos y Chunking
+PyPDF2>=3.0.0
+langchain-text-splitters>=0.0.1
+
+# Contratos de datos
+pydantic>=2.0.0
+
+# Arrays y matemáticas
+numpy>=1.24.0
+
+# LLM (OpenAI)
+openai>=1.0.0
+
+# Embeddings y Reranking (Transformers)
+sentence-transformers>=2.2.0
+torch>=2.0.0  # Requerido por sentence-transformers
+
+# Base de datos vectorial (Qdrant)
+qdrant-client>=1.7.0
+
+# Sparse vectors (BM25)
+rank-bm25>=0.2.2
+
+# Utilidades
+python-dotenv>=1.0.0  # Para variables de entorno
+
+# Interfaz web
+streamlit>=1.29.0  # Para la interfaz web interactiva
+
+# ============================================
+# OPCIONAL: Para PDF de prueba
+# ============================================
+reportlab>=4.0.0
