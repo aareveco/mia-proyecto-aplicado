@@ -1,0 +1,20 @@
+[project]
+name = "rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "langchain-text-splitters>=0.0.1",
+    "numpy>=1.24.0",
+    "openai>=1.0.0",
+    "pydantic>=2.0.0",
+    "pypdf2>=3.0.0",
+    "python-dotenv>=1.0.0",
+    "qdrant-client>=1.7.0",
+    "rank-bm25>=0.2.2",
+    "reportlab>=4.0.0",
+    "sentence-transformers>=2.2.0",
+    "streamlit>=1.29.0",
+    "torch>=2.0.0",
+]

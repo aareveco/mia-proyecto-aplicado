@@ -120,13 +120,33 @@ def main():
             print(f"\n📊 RESULTADOS ({len(context_list)} chunks recuperados)")
             print("=" * 70)
             
+            # Verificar si algún chunk tiene metadata estructurada
+            has_metadata = any(c.mz_values or c.rt_values or c.compound_names or c.bioactivities for c in context_list)
+            
+            if not has_metadata and (filter_suggestion and (filter_suggestion.target_mz or filter_suggestion.target_rt)):
+                print("\n⚠️  Nota: Los chunks recuperados no contienen metadata estructurada (m/z, RT)")
+                print("   Esto puede ocurrir si:")
+                print("   - Los chunks son secciones de métodos/referencias")
+                print("   - El LLM no extrajo valores de esos chunks específicos")
+                print("   - El documento no contiene la feature buscada\n")
+            
             for i, chunk in enumerate(context_list):
                 score_str = f"{chunk.rerank_score:.4f}" if chunk.rerank_score else "N/A"
                 print(f"\n[{i + 1}] {chunk.chunk_id}")
                 print(f"    Score: {score_str}")
-                print(f"    Método: {chunk.experimental_method}")
                 print(f"    Año: {chunk.publication_year}")
                 print(f"    Fuente: {chunk.source_file}")
+                
+                # Mostrar metadata estructurada si existe
+                if chunk.mz_values:
+                    print(f"    m/z: {chunk.mz_values}")
+                if chunk.rt_values:
+                    print(f"    RT: {chunk.rt_values}")
+                if chunk.compound_names:
+                    print(f"    Compuestos: {chunk.compound_names}")
+                if chunk.bioactivities:
+                    print(f"    Bioactividades: {chunk.bioactivities}")
+                
                 print(f"    Contenido: {chunk.content[:200]}...")
             
             print("\n" + "=" * 70)

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+.env
+
+# Qdrant Data (local storage - NO subir a git)
+qdrant_storage/
+
+# Modelos de ML (muy pesados)
+*.bin
+*.pt
+*.pth
+sentence-transformers/
+
+# PDFs de ejemplo (opcional - depende si quieres versionarlos)
+*.pdf
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Streamlit
+.streamlit/

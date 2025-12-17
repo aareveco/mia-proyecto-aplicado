@@ -28,7 +28,8 @@ from qdrant_client.models import (
     PointStruct, 
     Filter, 
     FieldCondition, 
-    MatchValue
+    MatchValue,
+    Range
 )
 
 # Chunking
@@ -58,26 +59,37 @@ class OpenAILLM:
         """Llama a OpenAI y extrae query reescrita + filtros"""
         print(f"-> [C6/OpenAI]: Generando Pydantic FilterSuggestion con {self.model}...")
         
-        system_prompt = """Eres un asistente especializado en metabolómica y anotación de compuestos bioactivos.
-Dado un query sobre features metabolómicas (m/z, RT, bioactividades), debes:
-1. Reescribir el query para hacerlo más específico técnicamente (incluir términos como "mass-to-charge ratio", "retention time", "bioactivity", nombres de compuestos)
-2. Sugerir filtros de metadata relevantes SOLO de estos campos disponibles:
-   - experimental_method (valores posibles: LC-MS, GC-MS, NMR, HPLC)
-   - publication_year (año numérico, ejemplo: 2024)
+        system_prompt = """Eres un asistente especializado en metabolómica.
 
-NO sugieras filtros para campos que no están en la lista anterior (como source_database, sample_type, compound_class).
+Analiza el query y extrae:
+1. Reescribir con terminología técnica (m/z → mass-to-charge ratio, RT → retention time)
+2. Extraer valores para búsqueda:
+   - target_mz: valor m/z si se menciona (ej: 449.107)
+   - target_rt: valor RT si se menciona (ej: 8.2)
+3. Extraer filtros Qdrant (solo campos indexados):
+   - publication_year: año si se menciona (campo indexado en Qdrant)
 
-Responde SOLO en formato JSON con esta estructura:
+IMPORTANTE: target_mz y target_rt NO van en metadata_filters (no son campos indexados en Qdrant).
+
+Responde SOLO en JSON:
 {
-    "rewritten_query": "query optimizado con terminología metabolómica",
-    "metadata_filters": {"campo": "valor"}
-}"""
+    "rewritten_query": "query con terminología técnica",
+    "metadata_filters": {
+        "publication_year": 2024
+    },
+    "target_mz": 449.107,
+    "target_rt": 8.2
+}
+
+Si no hay valores, usa null u omitir del objeto."""
 
         try:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": "Query original: Feature con m/z 449.107 y RT 8.2 min en Té Verde"},
+                    {"role": "assistant", "content": '{"rewritten_query": "Característica metabolómica con mass-to-charge ratio (m/z) de 449.107 y retention time (RT) de 8.2 minutos en Té Verde", "metadata_filters": {}, "target_mz": 449.107, "target_rt": 8.2}'},
                     {"role": "user", "content": f"Query original: {prompt}"}
                 ],
                 temperature=0.3,
@@ -85,9 +97,23 @@ Responde SOLO en formato JSON con esta estructura:
             )
             
             result = json.loads(response.choices[0].message.content)
+            
+            # Extraer valores
+            target_mz = result.get("target_mz")
+            target_rt = result.get("target_rt")
+            metadata_filters = result.get("metadata_filters", {})
+            
+            # Asegurar que target_mz y target_rt estén en metadata_filters
+            if target_mz is not None and "target_mz" not in metadata_filters:
+                metadata_filters["target_mz"] = target_mz
+            if target_rt is not None and "target_rt" not in metadata_filters:
+                metadata_filters["target_rt"] = target_rt
+            
             return FilterSuggestion(
                 rewritten_query=result.get("rewritten_query", prompt),
-                metadata_filters=result.get("metadata_filters", {})
+                metadata_filters=metadata_filters,
+                target_mz=target_mz,
+                target_rt=target_rt
             )
         except Exception as e:
             print(f"Error en OpenAI: {e}")
@@ -123,11 +149,16 @@ class ProcessedChunk(BaseModel):
     content: str
     source_file: str
     publication_year: int
-    experimental_method: str  # LC-MS, GC-MS, NMR, etc.
     chunk_id: str
     dense_vector: list[float] | None = None
     sparse_vector: tuple[list[int], list[float]] | None = None  # (indices, values)
     rerank_score: float | None = None  # <- ENRIQUECIMIENTO C7
+    
+    # Metadata estructurada (para metabolómica)
+    mz_values: list[float] | None = None
+    rt_values: list[float] | None = None
+    compound_names: list[str] | None = None
+    bioactivities: list[str] | None = None
 
 
 class BenchmarkEntry(BaseModel):
@@ -143,6 +174,10 @@ class FilterSuggestion(BaseModel):
 
     rewritten_query: str
     metadata_filters: dict[str, Any] = Field(default_factory=dict)
+    
+    # Metadata extraída del query para post-filtering
+    target_mz: float | None = None
+    target_rt: float | None = None
 
 
 # --- 2. CLASE: PATRÓN FACTORY (Creación) ---
@@ -166,7 +201,6 @@ class PDFLoader(AbstractLoader):
         text = ""
         metadata = {
             "publication_year": 2024,  # Default
-            "experimental_method": "Unknown"
         }
         
         try:
@@ -182,23 +216,75 @@ class PDFLoader(AbstractLoader):
                 # Extraer texto
                 for page in pdf_reader.pages:
                     text += page.extract_text() + "\n"
-                
-                # Buscar método experimental en el texto (heurística para metabolómica)
-                text_lower = text.lower()
-                if "lc-ms" in text_lower or "liquid chromatography" in text_lower or "uplc" in text_lower:
-                    metadata["experimental_method"] = "LC-MS"
-                elif "gc-ms" in text_lower or "gas chromatography" in text_lower:
-                    metadata["experimental_method"] = "GC-MS"
-                elif "nmr" in text_lower or "resonancia magnética" in text_lower:
-                    metadata["experimental_method"] = "NMR"
-                elif "hplc" in text_lower or "high performance" in text_lower:
-                    metadata["experimental_method"] = "HPLC"
                     
         except Exception as e:
             print(f"Error leyendo PDF {path}: {e}")
             return "", metadata
         
         return text, metadata
+    
+    def extract_structured_metadata(self, text: str) -> dict:
+        """Extrae metadata estructurada del chunk usando LLM"""
+        
+        # Si el chunk es muy corto o no relevante, retornar vacío
+        if len(text.strip()) < 50:
+            return {
+                "mz_values": None,
+                "rt_values": None,
+                "compound_names": None,
+                "bioactivities": None
+            }
+        
+        try:
+            from openai import OpenAI
+            import json
+            
+            client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+            
+            system_prompt = """Eres un experto en metabolómica. Extrae información estructurada del texto científico.
+
+Extrae:
+1. mz_values: Lista de valores m/z (mass-to-charge ratio). Busca patrones como "m/z 449.107", "mz: 449.1", etc.
+2. rt_values: Lista de valores RT (retention time) en minutos. Busca "RT 8.2", "retention time 8.2 min", etc.
+3. compound_names: Lista de nombres de compuestos químicos mencionados (Myricetina, Quercetina, etc.)
+4. bioactivities: Lista de bioactividades mencionadas (antioxidant, antidiabetic, anti-inflammatory, etc.)
+
+Responde SOLO en formato JSON:
+{
+    "mz_values": [449.107, ...] o null,
+    "rt_values": [8.2, ...] o null,
+    "compound_names": ["Myricetina", ...] o null,
+    "bioactivities": ["antioxidant", ...] o null
+}
+
+Si no encuentras información para algún campo, usa null."""
+
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Texto:\n{text[:1500]}"}  # Limitar a 1500 chars
+                ],
+                temperature=0.1,
+                response_format={"type": "json_object"}
+            )
+            
+            result = json.loads(response.choices[0].message.content)
+            return {
+                "mz_values": result.get("mz_values"),
+                "rt_values": result.get("rt_values"),
+                "compound_names": result.get("compound_names"),
+                "bioactivities": result.get("bioactivities")
+            }
+            
+        except Exception as e:
+            # Fallback silencioso: retornar None para todos los campos
+            return {
+                "mz_values": None,
+                "rt_values": None,
+                "compound_names": None,
+                "bioactivities": None
+            }
     
     def chunk_text(self, text: str, source_file: str, metadata: dict) -> List[ProcessedChunk]:
         """Divide el texto en chunks"""
@@ -217,19 +303,31 @@ class PDFLoader(AbstractLoader):
             for i in range(0, len(text), self.chunk_size - self.chunk_overlap):
                 text_chunks.append(text[i:i + self.chunk_size])
         
+        print(f"   -> Extrayendo metadata estructurada de {len(text_chunks)} chunks con LLM...")
+        
         # Crear ProcessedChunk para cada chunk
         for idx, chunk_text in enumerate(text_chunks):
             if chunk_text.strip():
+                # Extraer metadata estructurada del chunk con LLM
+                if idx % 10 == 0:  # Mostrar progreso cada 10 chunks
+                    print(f"      Procesando chunk {idx+1}/{len(text_chunks)}...")
+                
+                structured_meta = self.extract_structured_metadata(chunk_text)
+                
                 chunks.append(
                     ProcessedChunk(
                         content=chunk_text.strip(),
                         source_file=source_file,
                         publication_year=metadata["publication_year"],
-                        experimental_method=metadata["experimental_method"],
                         chunk_id=f"{Path(source_file).stem}-chunk-{idx}",
+                        mz_values=structured_meta["mz_values"],
+                        rt_values=structured_meta["rt_values"],
+                        compound_names=structured_meta["compound_names"],
+                        bioactivities=structured_meta["bioactivities"]
                     )
                 )
         
+        print(f"   -> Metadata estructurada extraída para {len(chunks)} chunks")
         return chunks
     
     def load_and_chunk(self, path: str) -> List[ProcessedChunk]:
@@ -274,7 +372,6 @@ class MarkdownLoader(AbstractLoader):
                             content=section.strip(),
                             source_file=path,
                             publication_year=2024,
-                            experimental_method="Unknown",
                             chunk_id=f"{Path(path).stem}-md-{idx}",
                         )
                     )
@@ -411,8 +508,14 @@ class QdrantVectorStore:
         self.bm25_encoder = bm25_encoder
 
         
-    def index_data(self, chunks: List[ProcessedChunk]):
-        """Indexa chunks en Qdrant"""
+    def index_data(self, chunks: List[ProcessedChunk], recreate_collection: bool = False):
+        """
+        Indexa chunks en Qdrant
+        
+        Args:
+            chunks: Lista de chunks a indexar
+            recreate_collection: Si True, elimina y recrea la colección. Si False, agrega a la existente.
+        """
         if not chunks:
             return
         
@@ -423,39 +526,44 @@ class QdrantVectorStore:
             print("ERROR: Los chunks no tienen vectores densos")
             return
         
-        # Crear o recrear colección
+        # Verificar si la colección existe
         try:
-            self.client.delete_collection(collection_name=self.collection_name)
+            collections = self.client.get_collections().collections
+            collection_exists = any(c.name == self.collection_name for c in collections)
         except:
-            pass
+            collection_exists = False
         
-        # Crear colección con dense + sparse vectors
-        self.client.create_collection(
-            collection_name=self.collection_name,
-            vectors_config={
-                "dense": VectorParams(
-                    size=self.vector_size,
-                    distance=Distance.COSINE,
-                )
-            },
-            sparse_vectors_config={
-                "sparse": SparseVectorParams()
-            },
-        )
-        
-        # Crear índices para los campos de filtrado
-        self.client.create_payload_index(
-            collection_name=self.collection_name,
-            field_name="experimental_method",
-            field_schema="keyword",
-        )
-        self.client.create_payload_index(
-            collection_name=self.collection_name,
-            field_name="publication_year",
-            field_schema="integer",
-        )
-        
-        print(f"[C4/Qdrant]: Índices creados para experimental_method y publication_year")
+        # Crear o recrear colección según parámetro
+        if recreate_collection or not collection_exists:
+            if collection_exists:
+                print(f"[C4/Qdrant]: Eliminando colección existente '{self.collection_name}'...")
+                self.client.delete_collection(collection_name=self.collection_name)
+            
+            print(f"[C4/Qdrant]: Creando nueva colección '{self.collection_name}'...")
+            # Crear colección con dense + sparse vectors
+            self.client.create_collection(
+                collection_name=self.collection_name,
+                vectors_config={
+                    "dense": VectorParams(
+                        size=self.vector_size,
+                        distance=Distance.COSINE,
+                    )
+                },
+                sparse_vectors_config={
+                    "sparse": SparseVectorParams()
+                },
+            )
+            
+            # Crear índice para publication_year
+            self.client.create_payload_index(
+                collection_name=self.collection_name,
+                field_name="publication_year",
+                field_schema="integer",
+            )
+            
+            print(f"[C4/Qdrant]: Índice creado para publication_year")
+        else:
+            print(f"[C4/Qdrant]: Usando colección existente '{self.collection_name}'")
         
         # Preparar puntos para Qdrant
         points = []
@@ -475,7 +583,10 @@ class QdrantVectorStore:
                         "content": chunk.content,
                         "source_file": chunk.source_file,
                         "publication_year": chunk.publication_year,
-                        "experimental_method": chunk.experimental_method,
+                        "mz_values": chunk.mz_values,
+                        "rt_values": chunk.rt_values,
+                        "compound_names": chunk.compound_names,
+                        "bioactivities": chunk.bioactivities,
                     },
                 )
             )
@@ -488,24 +599,137 @@ class QdrantVectorStore:
         )
         
         print(f"[C4/Qdrant]: Indexados {len(chunks)} chunks en colección '{self.collection_name}'")
+    
+    def collection_exists(self) -> bool:
+        """Verifica si la colección existe"""
+        try:
+            collections = self.client.get_collections().collections
+            return any(c.name == self.collection_name for c in collections)
+        except:
+            return False
+    
+    def get_collection_info(self) -> dict:
+        """Obtiene información de la colección"""
+        try:
+            info = self.client.get_collection(collection_name=self.collection_name)
+            return {
+                "points_count": info.points_count if hasattr(info, 'points_count') else 0,
+                "vectors_count": info.vectors_count if hasattr(info, 'vectors_count') else 0,
+                "indexed_vectors_count": info.indexed_vectors_count if hasattr(info, 'indexed_vectors_count') else 0,
+                "status": str(info.status) if hasattr(info, 'status') else "unknown"
+            }
+        except Exception as e:
+            print(f"[C4/Qdrant]: Error al obtener info de colección: {e}")
+            return None
+    
+    def delete_collection(self):
+        """Elimina la colección completa"""
+        try:
+            self.client.delete_collection(collection_name=self.collection_name)
+            print(f"[C4/Qdrant]: Colección '{self.collection_name}' eliminada")
+            return True
+        except Exception as e:
+            print(f"[C4/Qdrant]: Error al eliminar colección: {e}")
+            return False
+    
+    def list_documents(self) -> List[str]:
+        """Lista todos los documentos únicos en la colección"""
+        try:
+            # Hacer scroll para obtener todos los puntos
+            points, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=1000,
+                with_payload=True,
+                with_vectors=False
+            )
+            
+            # Extraer nombres únicos de archivos
+            documents = set()
+            for point in points:
+                if 'source_file' in point.payload:
+                    documents.add(point.payload['source_file'])
+            
+            return sorted(list(documents))
+        except:
+            return []
+    
+    def delete_document(self, source_file: str) -> int:
+        """
+        Elimina todos los chunks de un documento específico
+        
+        Args:
+            source_file: Nombre del archivo a eliminar
+            
+        Returns:
+            Número de chunks eliminados
+        """
+        try:
+            # Buscar todos los puntos del documento
+            points, _ = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="source_file",
+                            match=MatchValue(value=source_file)
+                        )
+                    ]
+                ),
+                limit=10000,
+                with_payload=False,
+                with_vectors=False
+            )
+            
+            # Extraer IDs
+            point_ids = [point.id for point in points]
+            
+            if point_ids:
+                # Eliminar puntos
+                self.client.delete(
+                    collection_name=self.collection_name,
+                    points_selector=point_ids
+                )
+                print(f"[C4/Qdrant]: Eliminados {len(point_ids)} chunks del documento '{source_file}'")
+            
+            return len(point_ids)
+        except Exception as e:
+            print(f"[C4/Qdrant]: Error al eliminar documento: {e}")
+            return 0
 
     def query_hybrid(self, query: str, query_vector: list[float], filters: Dict, k: int = 10) -> List[Dict]:
-        """Búsqueda híbrida REAL en Qdrant"""
-        print(f"[Qdrant Query]: Buscando con filtros: {filters}")
+        """Búsqueda híbrida REAL en Qdrant con filtros opcionales"""
         
-        # Construir filtro de Qdrant
-        qdrant_filter = None
+        # Separar filtros numéricos (opcional) de filtros exactos (must)
+        must_conditions = []
+        should_conditions = []
+        
         if filters:
-            conditions = []
             for key, value in filters.items():
-                conditions.append(
-                    FieldCondition(
-                        key=key,
-                        match=MatchValue(value=value),
+                # Filtros numéricos opcionales (boost si coincide, pero no requerido)
+                if key == "target_mz" and isinstance(value, (int, float)):
+                    # Nota: No filtramos por m/z porque puede excluir resultados relevantes
+                    # En su lugar, lo usamos en el reranking posterior
+                    pass
+                elif key == "target_rt" and isinstance(value, (int, float)):
+                    # Nota: No filtramos por RT porque puede excluir resultados relevantes
+                    pass
+                # Filtros exactos (must)
+                elif isinstance(value, (str, int)):
+                    must_conditions.append(
+                        FieldCondition(
+                            key=key,
+                            match=MatchValue(value=value),
+                        )
                     )
-                )
-            if conditions:
-                qdrant_filter = Filter(must=conditions)
+        
+        # Construir filtro final
+        qdrant_filter = None
+        if must_conditions:
+            qdrant_filter = Filter(must=must_conditions)
+        
+        # Log: Si hay filtros numéricos, informar que se usarán en post-procesamiento
+        if filters.get("target_mz") or filters.get("target_rt"):
+            print(f"[Qdrant Info]: Filtros numéricos (m/z, RT) se aplicarán en post-procesamiento")
 
         # Obtener sparse vector del query
         query_sparse = self.bm25_encoder.encode(query)
@@ -568,8 +792,8 @@ class HybridSearchStrategy(RetrievalStrategy):
         # 1. Embeddings del query
         query_vector = self.embedding_model.encode([query])[0].tolist()
         
-        # 2. Búsqueda en Qdrant
-        results_dict = self.vector_store.query_hybrid(query, query_vector, filters, k=k)
+        # 2. Búsqueda en Qdrant (sin filtros numéricos estrictos)
+        results_dict = self.vector_store.query_hybrid(query, query_vector, filters, k=k*3)  # Recuperar más para filtrar
         
         # 3. Convertir a ProcessedChunk
         chunks = []
@@ -579,10 +803,46 @@ class HybridSearchStrategy(RetrievalStrategy):
                     content=r["content"],
                     source_file=r["source_file"],
                     publication_year=r["publication_year"],
-                    experimental_method=r["experimental_method"],
-                    chunk_id=r["chunk_id"]
+                    chunk_id=r["chunk_id"],
+                    mz_values=r.get("mz_values"),
+                    rt_values=r.get("rt_values"),
+                    compound_names=r.get("compound_names"),
+                    bioactivities=r.get("bioactivities"),
                 )
             )
+        
+        # 4. Post-filtering opcional por m/z y RT (si están en filtros)
+        target_mz = filters.get("target_mz")
+        target_rt = filters.get("target_rt")
+        
+        if target_mz or target_rt:
+            filtered_chunks = []
+            for chunk in chunks:
+                score = 0
+                
+                # Boost por m/z match
+                if target_mz and chunk.mz_values:
+                    for mz in chunk.mz_values:
+                        if abs(mz - target_mz) <= 0.01:  # Tolerancia ±0.01
+                            score += 10
+                            break
+                
+                # Boost por RT match
+                if target_rt and chunk.rt_values:
+                    for rt in chunk.rt_values:
+                        if abs(rt - target_rt) <= 0.5:  # Tolerancia ±0.5 min
+                            score += 5
+                            break
+                
+                # Incluir todos los chunks pero dar prioridad a los que coinciden
+                chunk.rerank_score = score  # Temporal score para ordenamiento
+                filtered_chunks.append(chunk)
+            
+            # Ordenar por score (mayor primero)
+            filtered_chunks.sort(key=lambda c: c.rerank_score or 0, reverse=True)
+            chunks = filtered_chunks[:k]  # Limitar a k
+            
+            print(f"[C4 Post-Filter]: {len(chunks)} chunks ordenados por similitud m/z/RT")
         
         return chunks
 
@@ -603,9 +863,8 @@ class QueryRewritingStrategy(QueryProcessingStrategy):
 
     def process_query(self, query: str) -> FilterSuggestion:
         """Retorna un objeto Pydantic con la query optimizada y filtros."""
-        return self.llm.generate_structured(
-            prompt=f"Optimiza esta consulta científica: {query}"
-        )
+        # Pasar el query directamente, el prompt está en generate_structured
+        return self.llm.generate_structured(prompt=query)
     
 class QueryOptimizerRetriever(RetrievalStrategy):
     """
@@ -630,9 +889,14 @@ class QueryOptimizerRetriever(RetrievalStrategy):
 
         # 2. Combinar filtros iniciales con los filtros sugeridos por el LLM
         combined_filters = {**filters, **structured_query_output.metadata_filters}
+        
         print(
             f"[C6 Output]: Query reescrita: '{structured_query_output.rewritten_query}'. Filtros: {combined_filters}"
         )
+        
+        # Mostrar metadata extraída
+        if structured_query_output.target_mz or structured_query_output.target_rt:
+            print(f"[C6 Metadata]: target_mz={structured_query_output.target_mz}, target_rt={structured_query_output.target_rt}")
 
         # 3. Delegar al Retriever base, usando la query reescrita y los filtros combinados
         chunks = self.retriever.retrieve_context(
@@ -751,9 +1015,20 @@ def run_indexing_service(
     dense_adapter,
     sparse_adapter,
     vector_store,
+    recreate_collection: bool = False,
     **loader_kwargs
 ):
-    """Servicio de indexación REAL"""
+    """
+    Servicio de indexación REAL
+    
+    Args:
+        file_path: Ruta al archivo a indexar
+        dense_adapter: Adapter para embeddings densos
+        sparse_adapter: Adapter para embeddings sparse
+        vector_store: QdrantVectorStore
+        recreate_collection: Si True, elimina colección antes de indexar
+        **loader_kwargs: Argumentos para el loader (chunk_size, etc.)
+    """
     loader = DocumentLoaderFactory.get_loader(file_path, **loader_kwargs)
     chunks_pydantic = loader.load_and_chunk(file_path)
     
@@ -764,4 +1039,4 @@ def run_indexing_service(
     chunks_with_vectors = run_embedding_pipeline(
         chunks_pydantic, dense_adapter, sparse_adapter
     )
-    vector_store.index_data(chunks_with_vectors)
+    vector_store.index_data(chunks_with_vectors, recreate_collection=recreate_collection)

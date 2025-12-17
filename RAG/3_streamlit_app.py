@@ -354,6 +354,53 @@ def render_metric_card(label, value, icon):
     """
 
 
+def render_chunk_card_native(chunk, index):
+    """Renderiza una tarjeta de chunk usando componentes nativos de Streamlit"""
+    score_str = f"{chunk.rerank_score:.4f}" if chunk.rerank_score else "N/A"
+    
+    # Crear card con Streamlit nativo
+    with st.container():
+        # Header del chunk
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            st.markdown(f"### 📄 Chunk {index + 1}")
+            st.code(chunk.chunk_id, language=None)
+        
+        with col2:
+            st.metric("Score", score_str)
+        
+        # Barra de progreso del score
+        if chunk.rerank_score:
+            # Normalizar score a 0-1
+            normalized_score = max(0, min(1, (chunk.rerank_score + 5) / 20))
+            st.progress(normalized_score)
+        
+        # Metadata
+        st.markdown(f"📅 **Año:** {chunk.publication_year}")
+        
+        # Metadata estructurada (si existe)
+        if chunk.mz_values or chunk.rt_values or chunk.compound_names or chunk.bioactivities:
+            with st.expander("🔍 Metadata Estructurada", expanded=False):
+                if chunk.mz_values:
+                    st.markdown(f"**⚛️ m/z values:** {', '.join([f'{v:.3f}' for v in chunk.mz_values])}")
+                if chunk.rt_values:
+                    st.markdown(f"**⏱️ RT values:** {', '.join([f'{v:.2f} min' for v in chunk.rt_values])}")
+                if chunk.compound_names:
+                    st.markdown(f"**🧪 Compuestos:** {', '.join(chunk.compound_names)}")
+                if chunk.bioactivities:
+                    st.markdown(f"**🎯 Bioactividades:** {', '.join(chunk.bioactivities)}")
+        
+        # Contenido
+        st.markdown("**📝 Contenido:**")
+        st.info(chunk.content)
+        
+        # Fuente
+        st.caption(f"📂 Fuente: `{chunk.source_file}`")
+        
+        st.divider()
+
+
 def render_chunk_card(chunk, index):
     """Renderiza una tarjeta de chunk con diseño mejorado"""
     score_str = f"{chunk.rerank_score:.4f}" if chunk.rerank_score else "N/A"
@@ -365,15 +412,6 @@ def render_chunk_card(chunk, index):
         score_percentage = normalized_score
     else:
         score_percentage = 0
-    
-    # Determinar color del método
-    method_colors = {
-        "LC-MS": "#3b82f6",
-        "GC-MS": "#10b981",
-        "NMR": "#f59e0b",
-        "HPLC": "#8b5cf6"
-    }
-    method_color = method_colors.get(chunk.experimental_method, "#6b7280")
     
     return f"""
     <div class="chunk-card">
@@ -401,9 +439,6 @@ def render_chunk_card(chunk, index):
         </div>
         
         <div style="display: flex; gap: 0.5rem; margin: 1rem 0;">
-            <span class="badge badge-info">
-                🔬 {chunk.experimental_method}
-            </span>
             <span class="badge badge-success">
                 📅 {chunk.publication_year}
             </span>
@@ -539,7 +574,7 @@ def main():
     # Query input mejorado
     st.markdown("### 🔍 Tu Consulta Metabolómica")
     query_input = st.text_area(
-        "",
+        "Query input",
         value=st.session_state.get('example_query', ''),
         height=120,
         placeholder="💬 Ejemplo: Tengo una feature con m/z 449.107, RT 8.2 min en Té Verde. ¿Qué es y qué bioactividad tiene?",
@@ -631,19 +666,36 @@ def main():
                             """, unsafe_allow_html=True)
                         
                         with col2:
-                            st.markdown("**🏷️ Filtros Sugeridos:**")
+                            st.markdown("**🏷️ Filtros Detectados:**")
                             if filter_suggestion.metadata_filters:
                                 filters_html = ""
                                 for key, value in filter_suggestion.metadata_filters.items():
+                                    # Formatear según el tipo de valor
+                                    if key == "target_mz":
+                                        display_key = "⚛️ m/z"
+                                        display_value = f"{value:.3f} Da"
+                                    elif key == "target_rt":
+                                        display_key = "⏱️ RT"
+                                        display_value = f"{value:.2f} min"
+                                    elif key == "publication_year":
+                                        display_key = "📅 Año"
+                                        display_value = str(value)
+                                    else:
+                                        display_key = key
+                                        display_value = str(value)
+                                    
                                     filters_html += f"""
-                                    <div style="background: white; padding: 0.5rem; border-radius: 6px; margin-bottom: 0.5rem;">
-                                        <span class="badge badge-primary">{key}</span>
-                                        <strong>{value}</strong>
+                                    <div style="background: white; padding: 0.75rem; border-radius: 6px; margin-bottom: 0.5rem; border-left: 3px solid #3b82f6;">
+                                        <div style="font-size: 0.875rem; color: #6b7280;">{display_key}</div>
+                                        <div style="font-size: 1.125rem; font-weight: 600; color: #1f2937;">{display_value}</div>
                                     </div>
                                     """
                                 st.markdown(filters_html, unsafe_allow_html=True)
+                                
+                                # Mostrar info de filtrado
+                                st.info(f"ℹ️ Búsqueda dirigida: {len(filter_suggestion.metadata_filters)} filtros aplicados para encontrar chunks relevantes.")
                             else:
-                                st.info("Sin filtros específicos")
+                                st.info("Sin filtros específicos - Búsqueda general")
                     
                     # Stage 3: Búsqueda Híbrida (C4)
                     with st.expander("3️⃣ Búsqueda Híbrida (C4 - Qdrant + RRF)", expanded=True):
@@ -658,6 +710,17 @@ def main():
                             st.metric("🎯 Candidatos", len(context_list), help="Chunks recuperados antes de reranking")
                         with col2:
                             st.metric("🔢 Vector Dim", "384", help="Dimensión de embeddings densos")
+                        
+                        # Mostrar metadata de los chunks recuperados
+                        if context_list:
+                            with st.expander("📋 Metadata de chunks recuperados", expanded=False):
+                                for i, chunk in enumerate(context_list[:3]):  # Mostrar primeros 3
+                                    st.markdown(f"""
+                                    **Chunk {i+1}**: `{chunk.chunk_id}`  
+                                    - Año: **{chunk.publication_year}** {"✅" if not filter_suggestion or not filter_suggestion.metadata_filters.get('publication_year') or chunk.publication_year == filter_suggestion.metadata_filters.get('publication_year') else "❌"}
+                                    """)
+                                if len(context_list) > 3:
+                                    st.caption(f"... y {len(context_list) - 3} chunks más")
                         with col3:
                             st.metric("⚡ Método", "Híbrido", help="Dense + Sparse fusion")
                         
@@ -667,8 +730,7 @@ def main():
                             for i, chunk in enumerate(context_list[:5]):
                                 preview_html += f"""
                                 <div style="background: white; padding: 0.75rem; border-radius: 6px; margin-bottom: 0.5rem; border-left: 3px solid #3b82f6;">
-                                    <strong>Chunk {i+1}:</strong> <code>{chunk.chunk_id}</code> 
-                                    <span class="badge badge-info">{chunk.experimental_method}</span>
+                                    <strong>Chunk {i+1}:</strong> <code>{chunk.chunk_id}</code>
                                 </div>
                                 """
                             st.markdown(preview_html, unsafe_allow_html=True)
@@ -759,18 +821,17 @@ def main():
                         ), unsafe_allow_html=True)
                     
                     with col3:
-                        methods = set(c.experimental_method for c in context_list)
                         st.markdown(render_metric_card(
-                            "Métodos Detectados",
-                            len(methods),
-                            "🔬"
+                            "Chunks Recuperados",
+                            len(context_list),
+                            "📄"
                         ), unsafe_allow_html=True)
                     
                     st.markdown("<br>", unsafe_allow_html=True)
                     
-                    # Mostrar chunks con diseño mejorado
+                    # Mostrar chunks con diseño mejorado (componentes nativos)
                     for i, chunk in enumerate(context_list):
-                        st.markdown(render_chunk_card(chunk, i), unsafe_allow_html=True)
+                        render_chunk_card_native(chunk, i)
                     
                     # ============== GENERACIÓN DE RESPUESTA FINAL CON LLM ==============
                     st.markdown("<br><br>", unsafe_allow_html=True)
@@ -848,7 +909,7 @@ RESPUESTA:"""
                                 for i, chunk in enumerate(context_list):
                                     st.markdown(f"""
                                     **Chunk {i+1}** (Score: {chunk.rerank_score:.4f})  
-                                    `{chunk.chunk_id}` - {chunk.experimental_method}
+                                    `{chunk.chunk_id}`
                                     """)
                                     with st.container():
                                         st.text(chunk.content[:300] + "..." if len(chunk.content) > 300 else chunk.content)
