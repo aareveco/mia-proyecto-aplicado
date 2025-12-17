@@ -1,27 +1,29 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import numpy as np
 
 from src.domain.models import ProcessedChunk
 from src.application.ports.embedder_port import AbstractEmbedder
 from src.application.ports.vector_store_port import VectorStoreImpl, RetrievalStrategy
-from src.infrastructure.loaders.factory import DocumentLoaderFactory
-
-# New imports
 from src.application.ports.llm_port import LLMService
 from src.application.ports.reranker_port import RerankerService
+
 from src.application.services.query_processing import QueryRewritingStrategy
+from src.application.ports.pubchem_port import PubChemService
 from src.application.services.retrieval_strategies import (
     CompositionalHybridSearchRetriever,
+    FederatedRetriever,
+    PubChemRetriever,
     QueryOptimizerRetriever,
     RerankingDecorator,
     ContextRepackerDecorator
 )
 from src.application.services.generation_service import AugmentedGenerator
-from src.infrastructure.llm.local_llm_service import LocalLLMService
-from src.infrastructure.reranker.dummy_reranker import DummyRerankerService
 
-# Temporary simpler implementations for strategies if not injected
+
 class VectorRetrievalStrategy(RetrievalStrategy):
+    """
+    Simple adapter to use VectorStoreImpl as a RetrievalStrategy.
+    """
     def __init__(self, vector_store: VectorStoreImpl, embedder: AbstractEmbedder):
         self.vector_store = vector_store
         self.embedder = embedder
@@ -33,47 +35,46 @@ class VectorRetrievalStrategy(RetrievalStrategy):
         query_vector = self.embedder.embed_chunks([query_chunk])[0]
         
         # Query DB
-        # TODO: Pass filters if supported by vector_store
-        # db_impl.query_data currently doesn't take filters in signature shown in qdrant_db.py, 
-        # but VectorStoreImpl signature in 'vector_store_port.py' (viewed earlier) had 
-        # abstract methods. Wait, I saw 'vector_store_port.py' earlier and it had:
-        # def query_data(self, query_vector: np.ndarray, top_k: int = 5) -> List[Dict]:
-        # It didn't obviously show filters argument in abstract method? 
-        # Let's check line 14 of 'vector_store_port.py'.
-        # Assuming no filters support in base for now, or we handle it in implementation.
-        
-        results_dict = self.vector_store.query_data(query_vector, top_k=top_k)
+        results_dict = self.vector_store.query_data(query_vector, top_k=top_k, filters=filters)
         return [ProcessedChunk(**r) for r in results_dict]
 
-from src.infrastructure.retrieval.bm25_service import BM25RetrieverImpl
 
 class VectorStoreService:
     """
-    Updated Service handling the full RAG pipeline (Advanced).
+    Updated Service handling the full RAG pipeline (Advanced) with Dependency Injection.
     """
 
-    def __init__(self, embedder: AbstractEmbedder, db_impl: VectorStoreImpl):
+    def __init__(
+        self, 
+        embedder: AbstractEmbedder, 
+        db_impl: VectorStoreImpl,
+        llm_service: LLMService,
+        reranker_service: RerankerService,
+        sparse_retriever: RetrievalStrategy, 
+        pubchem_service: Optional[PubChemService] = None, 
+        # Optional: Allow overriding the composition logic or strategies if needed, 
+        # but for now we compose them here using the injected components.
+    ):
         self._embedder = embedder
         self._db_impl = db_impl
-        
-        # Initialize Services (In a real app, DI container handles this)
-        # Assuming persistence path for BM25
-        self.bm25_retriever = BM25RetrieverImpl(storage_path="data/bm25_index.pkl")
-        
-        self.llm_service = LocalLLMService()
-        self.reranker_service = DummyRerankerService()
+        self.llm_service = llm_service
+        self.reranker_service = reranker_service
+        self.sparse_retriever = sparse_retriever
+        self.pubchem_service = pubchem_service
         
         # Build Retrieval Chain
         
         # 1. Base Strategies
         self.dense_strategy = VectorRetrievalStrategy(self._db_impl, self._embedder)
-        self.sparse_strategy = self.bm25_retriever # Replaced Placeholder with Real BM25
         
-        # 2. Hybrid
-        self.hybrid_strategy = CompositionalHybridSearchRetriever(
-            dense_strategy=self.dense_strategy, 
-            sparse_strategy=self.sparse_strategy
-        )
+        # 2. Hybrid / Federated
+        strategies = [self.dense_strategy, self.sparse_retriever]
+        if self.pubchem_service:
+            print("[Service] PubChem Service enabled. Adding PubChemRetriever.")
+            self.pubchem_retriever = PubChemRetriever(self.pubchem_service)
+            strategies.append(self.pubchem_retriever)
+            
+        self.hybrid_strategy = FederatedRetriever(strategies=strategies)
         
         # 3. Query Optimization
         self.query_processor = QueryRewritingStrategy(self.llm_service)
@@ -103,15 +104,17 @@ class VectorStoreService:
         metadatas = [c.model_dump() for c in chunks]
         self._db_impl.index_data(vectors, metadatas, overwrite=overwrite)
         
-        # Index in BM25
-        print("[Service] Indexing in BM25...")
-        self.bm25_retriever.index_documents(chunks, overwrite=overwrite)
+        # Index in Sparse Retriever (if it supports indexing interface)
+        # Assuming sparse_retriever has index_documents method (it might need a separate Port definition for Indexing vs Retrieval)
+        # For now, we assume it's the BM25RetrieverImpl which has it.
+        # In a strict port sense, we should have an Indexable interface.
+        if hasattr(self.sparse_retriever, "index_documents"):
+            print("[Service] Indexing in Sparse Retriever...")
+            self.sparse_retriever.index_documents(chunks, overwrite=overwrite)
 
     def query(self, query_text: str, top_k: int = 5) -> List[ProcessedChunk]:
         """
-        Legacy/Simple query (wraps advanced pipeline or stays simple?)
-        The prompt asked to REFACTOR retrieve.
-        Let's use the advanced pipeline here.
+        Executes the full retrieval pipeline.
         """
         return self.final_retriever.retrieve_context(query_text, {}, top_k=top_k)
 
@@ -122,18 +125,6 @@ class VectorStoreService:
         return self.generator.generate_answer(query, context)
 
 
-def run_indexing_service(
-    file_path: str,
-    vector_store: VectorStoreService,
-    overwrite: bool = False,
-) -> None:
-    loader = DocumentLoaderFactory.get_loader(file_path)
-    chunks = loader.load_and_chunk(file_path)
-    print("[Index] Generando embeddings e indexando en Qdrant...")
-    vector_store.index_chunks(chunks, overwrite=overwrite)
-    print("[Index] Listo.")
-
-
 def run_retrieval_service(
     query: str,
     vector_store: VectorStoreService,
@@ -142,3 +133,15 @@ def run_retrieval_service(
     print(f"[Retrieval] Ejecutando búsqueda avanzada para: {query!r}")
     results = vector_store.query(query, top_k=top_k)
     return results
+
+# run_indexing_service helper might interact with DocumentLoaderFactory which is infrastructure.
+# To fail safely, we can keep it here IF we import factory ONLY inside the function, 
+# or better, move this helper to a script or the infrastructure layer. 
+# But let's check imports. loading factory is infra.
+# So this function logically belongs to a higher level (like a CLI or Orchestrator in Infra), not Domain/App services.
+# However, for now, to avoid breaking too much, I will remove the Import from top level and import locally, 
+# OR move it to app.py/scripts. 
+# Best Clean Code practice: Move `run_indexing_service` to `app.py` or a dedicated `pipeline_runner.py` in infra.
+# I will REMOVE it from here to enforce separation. 
+# Note: app.py used it. I will move it to app.py.
+

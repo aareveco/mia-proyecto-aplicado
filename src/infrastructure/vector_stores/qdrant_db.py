@@ -81,13 +81,44 @@ class QdrantImpl(VectorStoreImpl):
         self.client.upsert(collection_name=self.collection_name, points=points)
         print(f"[Qdrant] Indexados {len(points)} puntos. (Persistido: {True})")
 
-    def query_data(self, query_vector: np.ndarray, top_k: int = 5) -> List[Dict]:
+    def query_data(self, query_vector: np.ndarray, top_k: int = 5, filters: Dict = None) -> List[Dict]:
         try:
+            # Build Qdrant Filter
+            qdrant_filter = None
+            if filters:
+                 from qdrant_client.models import Filter, FieldCondition, MatchValue, Range
+                 conditions = []
+                 for key, value in filters.items():
+                     # Handle different types
+                     if isinstance(value, float):
+                         # For floats, use Range with exact match (or small epsilon if desired, but here exact)
+                         # Providing both gte and lte as value implies exact float match
+                         conditions.append(
+                            FieldCondition(
+                                key=f"metadata.{key}", 
+                                range=Range(gte=value, lte=value)
+                            )
+                         )
+                     elif isinstance(value, (int, bool, str)):
+                         conditions.append(
+                            FieldCondition(
+                                key=f"metadata.{key}", 
+                                match=MatchValue(value=value)
+                            )
+                         )
+                     else:
+                         # Fallback or skip complex types
+                         pass
+                         
+                 if conditions:
+                    qdrant_filter = Filter(must=conditions)
+
             result = self.client.query_points(
                 collection_name=self.collection_name,
                 query=query_vector.tolist(),
                 limit=top_k,
                 with_payload=True,
+                query_filter=qdrant_filter
             )
         except Exception as e:
             # Si consultamos antes de indexar nada

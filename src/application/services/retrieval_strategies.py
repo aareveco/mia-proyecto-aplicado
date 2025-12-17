@@ -4,6 +4,53 @@ from src.application.ports.vector_store_port import VectorStoreImpl, RetrievalSt
 from src.application.ports.reranker_port import RerankerService
 from src.application.services.query_processing import QueryProcessingStrategy
 from src.domain.models import ProcessedChunk
+from src.application.ports.pubchem_port import PubChemService
+
+class PubChemRetriever(RetrievalStrategy):
+    """
+    Retrieves compound information from PubChem if 'mz' filter is present.
+    """
+    def __init__(self, pubchem_service: PubChemService):
+        self.pubchem = pubchem_service
+
+    def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
+        mz = filters.get("mz")
+        if not mz:
+            return []
+        
+        try:
+            # Cast to float if it's a string/number
+            mz_val = float(mz)
+        except (ValueError, TypeError):
+            return []
+
+        print(f"[PubChemRetriever] Searching for m/z: {mz_val}")
+        result = self.pubchem.get_compound_by_mz(mz_val)
+        
+        if not result:
+            return []
+            
+        # Convert result to ProcessedChunk
+        # We create a synthetic chunk with the compound info
+        compounds = result.get("compounds", [])
+        content_lines = ["**PubChem Search Results**"]
+        for c in compounds:
+            name = c.get("Title", "Unknown")
+            formula = c.get("MolecularFormula", "")
+            content_lines.append(f"- Name: {name}, Formula: {formula}")
+            
+        full_content = "\n".join(content_lines)
+        
+        chunk = ProcessedChunk(
+            content=full_content,
+            metadata={
+                "source": "PubChem",
+                "mz_query": mz_val,
+                "raw_result": str(result)
+            }
+        )
+        return [chunk]
+
 
 def reciprocal_rank_fusion(results_lists: List[List[ProcessedChunk]], k=60) -> List[ProcessedChunk]:
     """
@@ -63,30 +110,33 @@ class HybridSearchRetriever(RetrievalStrategy):
         # dense_strategy and sparse_strategy.
         pass
 
-# Redefining to use composition of strategies
-class CompositionalHybridSearchRetriever(RetrievalStrategy):
+class FederatedRetriever(RetrievalStrategy):
     """
-    Hybrid Search using two underlying strategies.
+    Executes multiple retrieval strategies in parallel (or sequentially) and merges results using RRF.
     """
-    def __init__(self, dense_strategy: RetrievalStrategy, sparse_strategy: RetrievalStrategy):
-        self.dense = dense_strategy
-        self.sparse = sparse_strategy
+    def __init__(self, strategies: List[RetrievalStrategy]):
+        self.strategies = strategies
 
     def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
-        print(f"Búsqueda Híbrida: Dense + Sparse")
+        results_lists = []
+        for strategy in self.strategies:
+            # We could do this in parallel threads
+            results_lists.append(strategy.retrieve_context(query, filters, top_k))
         
-        # Parallelize if possible, currently sequential
-        dense_results = self.dense.retrieve_context(query, filters, top_k)
-        sparse_results = self.sparse.retrieve_context(query, filters, top_k)
-        
-        # RRF
-        combined = reciprocal_rank_fusion([dense_results, sparse_results])
-        
+        # Merge using RRF
+        combined = reciprocal_rank_fusion(results_lists)
         return combined[:top_k]
 
-# ... (Previous classes QueryOptimizerRetriever, RetrievalDecorator, etc. remain below or imported)
-# I will append or rewrite the file. 
-# Since I partially implemented it before, I will rewrite the whole file to include everything cleanly.
+# Redefining to use composition of strategies
+class CompositionalHybridSearchRetriever(FederatedRetriever):
+    """
+    Hybrid Search using two underlying strategies.
+    (Backwards compatibility wrapper around FederatedRetriever)
+    """
+    def __init__(self, dense_strategy: RetrievalStrategy, sparse_strategy: RetrievalStrategy):
+        super().__init__([dense_strategy, sparse_strategy])
+
+
 
 class QueryOptimizerRetriever(RetrievalStrategy):
     """
