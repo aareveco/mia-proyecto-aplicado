@@ -57,7 +57,10 @@ class PubChemRetriever(RetrievalStrategy):
         for c in compounds:
             name = c.get("Title", "Unknown")
             formula = c.get("MolecularFormula", "")
+            bio = c.get("Bioactivity", [])
+            bio_str = "; ".join(bio) if bio else "No specific assays found."
             content_lines.append(f"- Name: {name}, Formula: {formula}")
+            content_lines.append(f"  Bioactivities: {bio_str}")
             
         full_content = "\n".join(content_lines)
         

@@ -48,6 +48,17 @@ class PubChemAdapter(PubChemService):
                 
             props = details_resp.json().get("PropertyTable", {}).get("Properties", [])
             
+            # --- NEW: Fetch BioAssays for the top 1 compound to add bioactivity context ---
+            # We only do it for the first one to save time/bandwidth in this demo
+            if top_cids:
+                main_cid = top_cids[0]
+                bio_info = self._fetch_bioassays(main_cid)
+                # Attach to the first property object if it matches CID (it should)
+                for p in props:
+                    if p.get("CID") == main_cid:
+                        p["Bioactivity"] = bio_info
+                        break
+
             # Construct a rich result
             result_context = {
                 "source": "PubChem",
@@ -59,3 +70,47 @@ class PubChemAdapter(PubChemService):
         except Exception as e:
             print(f"[PubChem] Exception during API call: {e}")
             return None
+
+    def _fetch_bioassays(self, cid: int, limit: int = 5) -> List[str]:
+        """
+        Fetch active bioassays for a given CID.
+        URL: .../compound/cid/{cid}/assaysummary/JSON
+        """
+        url = f"{self.BASE_URL}/compound/cid/{cid}/assaysummary/JSON"
+        try:
+            # Short timeout, optional feature
+            resp = requests.get(url, timeout=3)
+            if resp.status_code != 200:
+                return []
+            
+            data = resp.json()
+            # Debug Print
+            # print(f"[DEBUG] PubChem Assay Data Keys: {data.keys()}")
+            
+            table = data.get("Table", {}).get("Row", [])
+            
+            activities = []
+            for row in table:
+                cell = row.get("Cell", [])
+                
+                # Cell is a list of strings: [AID, ..., Activity, ..., AssayName, ...]
+                # From debug: Index 4 is Activity, Index 9 is Name (usually)
+                # But to be safe vs schema changes, we can look for "Active" and then find the longest string or the one at index 9.
+                
+                # Ensure cell has enough items
+                if len(cell) < 10:
+                    continue
+                    
+                activity_outcome = cell[4] if len(cell) > 4 else ""
+                assay_name = cell[9] if len(cell) > 9 else ""
+                
+                if activity_outcome == "Active" and assay_name:
+                    activities.append(assay_name)
+            
+            # Deduplicate and limit
+            unique_acts = list(set(activities))
+            return unique_acts[:limit]
+            
+        except Exception as e:
+            # print(f"[PubChem] Error fetching bioassays for {cid}: {e}")
+            return []
