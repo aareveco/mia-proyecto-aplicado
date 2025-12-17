@@ -16,7 +16,6 @@ from src.application.services.retrieval_strategies import (
     QueryOptimizerRetriever,
     RerankingDecorator,
     ContextRepackerDecorator,
-    VectorRetrievalStrategy
 )
 from src.application.services.generation_service import AugmentedGenerator
 
@@ -49,23 +48,40 @@ class VectorStoreService:
         
         # Build Retrieval Chain
         
-        # 1. Base Strategies
-        self.dense_strategy = VectorRetrievalStrategy(self._db_impl, self._embedder)
+        # 1. Retrieval Strategies
+        # using the injected sparse_retriever (BM25Adapter) as the sparse encoder
+        from src.application.services.retrieval_strategies import QdrantHybridStrategy, DenseRetriever
         
-        # 2. Hybrid / Federated
-        strategies = [self.dense_strategy, self.sparse_retriever]
+        # A. Hybrid (Dense + Sparse)
+        self.hybrid_strategy = QdrantHybridStrategy(
+            vector_store=self._db_impl,
+            embedder=self._embedder,
+            sparse_encoder=self.sparse_retriever
+        )
+        
+        # B. Dense Only (Semantic)
+        self.dense_strategy = DenseRetriever(
+            vector_store=self._db_impl,
+            embedder=self._embedder
+        )
+        
+        # C. PubChem (if enabled)
+        self.pubchem_retriever = None
         if self.pubchem_service:
-            print("[Service] PubChem Service enabled. Adding PubChemRetriever.")
+            print("[RAG Service] Integrating PubChem Retriever...")
             self.pubchem_retriever = PubChemRetriever(self.pubchem_service)
-            strategies.append(self.pubchem_retriever)
             
-        self.hybrid_strategy = FederatedRetriever(strategies=strategies)
+        # Default Federated (Hybrid + PubChem) for backward compatibility
+        strategies = [self.hybrid_strategy]
+        if self.pubchem_retriever:
+             strategies.append(self.pubchem_retriever)
+        self.federated_strategy = FederatedRetriever(strategies)
         
         # 3. Query Optimization
         self.query_processor = QueryRewritingStrategy(self.llm_service)
         self.optimizer_retriever = QueryOptimizerRetriever(
             query_processor=self.query_processor,
-            retrieval_strategy=self.hybrid_strategy
+            retrieval_strategy=self.federated_strategy 
         )
         
         # 4. Reranking
@@ -81,6 +97,23 @@ class VectorStoreService:
         
         # Generation
         self.generator = AugmentedGenerator(self.llm_service)
+
+    def get_retrieval_strategy(self, mode: str = "hybrid", use_pubchem: bool = True) -> RetrievalStrategy:
+        """
+        Factory method to get a strategy based on configuration.
+        mode: 'hybrid' | 'dense'
+        """
+        # 1. Select Base
+        if mode == "dense":
+            base = self.dense_strategy
+        else: # default hybrid
+            base = self.hybrid_strategy
+        
+        # 2. Combine with PubChem?
+        if use_pubchem and self.pubchem_retriever:
+            return FederatedRetriever([base, self.pubchem_retriever])
+        
+        return base
 
     def index_chunks(self, chunks: List[ProcessedChunk], overwrite: bool = False) -> None:
         vectors = self._embedder.embed_chunks(chunks)

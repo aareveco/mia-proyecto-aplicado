@@ -61,43 +61,78 @@ class PDFLoader(AbstractLoader):
             table_meta = self._detect_scientific_metadata(df)
             
             if table_meta.get("has_scientific_data"):
-                # Chunking logic for scientific tables: groups of 10 rows
-                chunk_size = 10
-                total_rows = len(df)
+                # Chunking logic for scientific tables: ONE row per chunk (JSON format)
+                # This allows precise filtering (e.g., specific mz/rt values).
                 
-                # Iterate over the dataframe in chunks
-                for start_row in range(0, total_rows, chunk_size):
-                    end_row = min(start_row + chunk_size, total_rows)
-                    df_chunk = df.iloc[start_row:end_row]
+                # Get column names detected
+                mz_col = table_meta.get("mz_column")
+                rt_col = table_meta.get("rt_column")
+                
+                # Iterate row by row
+                for idx, row in df.iterrows():
+                    # Convert row to dictionary (JSON structure)
+                    row_dict = row.to_dict()
                     
-                    # Convert chunk to Markdown
-                    content_md = df_chunk.to_markdown(index=False, tablefmt="github")
+                    # Convert to JSON string for the content
+                    try:
+                        import json
+                        # Custom encoder not strictly needed if pandas types are standard, but helpful for float32 etc
+                        content_json = json.dumps(row_dict, default=str)
+                    except Exception:
+                        content_json = str(row_dict)
                     
-                    # Create metadata for this chunk
+                    # Create metadata for this row
                     chunk_meta = table_meta.copy()
                     chunk_meta.update({
                         "table_index": i,
-                        "row_start": start_row,
-                        "row_end": end_row,
-                        "total_table_rows": total_rows,
+                        "row_index": idx,
                         "file_name": file_name,
-                        "chunk_type": "scientific_table"
+                        "chunk_type": "scientific_table_row"
                     })
                     
-                    # Create ProcessedChunk
+                    # Extract specific scientific values for filtering
+                    extracted_mz = []
+                    extracted_rt = []
+                    
+                    # Helper to clean and float-convert
+                    def safe_float(val):
+                        try:
+                            if isinstance(val, (int, float)):
+                                return float(val)
+                            val_str = str(val).lower().strip()
+                            # Handle typical noise if necessary, or just try float
+                            return float(val_str)
+                        except:
+                            return None
+
+                    if mz_col and mz_col in row:
+                        val = safe_float(row[mz_col])
+                        if val is not None:
+                            extracted_mz.append(val)
+                            
+                    if rt_col and rt_col in row:
+                        val = safe_float(row[rt_col])
+                        if val is not None:
+                            extracted_rt.append(val)
+
+                    # Create ProcessedChunk with specific fields populated
                     chunks.append(
                         ProcessedChunk(
-                            content=content_md,
+                            content=content_json,
                             source_file=path,
-                            page=None, # Docling tables might not map easily to a single page without extra logic
-                            chunk_id=f"{file_name}-table-{i}-rows-{start_row}-{end_row}",
-                            type="table",
-                            metadata=chunk_meta
+                            page=None, 
+                            chunk_id=f"{file_name}-table-{i}-row-{idx}",
+                            type="table_row_json",
+                            metadata=chunk_meta,
+                            mz_values=extracted_mz if extracted_mz else None,
+                            rt_values=extracted_rt if extracted_rt else None
                         )
                     )
                     table_chunk_count += 1
             else:
-                 # Optional: Handle non-scientific tables if needed, for now skip or add as whole
+                 # Non-scientific tables: keep as markdown blocks (chunk size 10?) 
+                 # or just skip as per previous logic implied preference.
+                 # Let's keep a simple fallback to markdown for non-scientific tables to preserve context.
                  pass
 
         print(f"[Loader] Generados {table_chunk_count} table chunks desde {path}")

@@ -10,6 +10,11 @@ class CleanerProcessor(ChunkProcessor):
     def process(self, chunks: List[ProcessedChunk]) -> List[ProcessedChunk]:
         cleaned_chunks = []
         for chunk in chunks:
+            # Skip cleaning for structured JSON chunks
+            if chunk.type == "table_row_json":
+                cleaned_chunks.append(chunk)
+                continue
+
             text = chunk.content
             # Remove multiple newlines
             text = re.sub(r'\n+', '\n', text)
@@ -34,6 +39,10 @@ class MetadataExtractorProcessor(ChunkProcessor):
         rt_pattern = re.compile(r'RT\s*[:=]?\s*(\d+\.?\d*)', re.IGNORECASE)
         
         for chunk in chunks:
+            # Skip extraction for structured chunks (already handled in loader)
+            if chunk.type == "table_row_json":
+                continue
+
             text = chunk.content
             
             # Init metadata if None

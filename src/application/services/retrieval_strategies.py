@@ -7,22 +7,63 @@ from src.application.services.query_processing import QueryProcessingStrategy
 from src.domain.models import ProcessedChunk
 from src.application.ports.pubchem_port import PubChemService
 
-class VectorRetrievalStrategy(RetrievalStrategy):
+class DenseRetriever(RetrievalStrategy):
     """
-    Simple adapter to use VectorStoreImpl as a RetrievalStrategy.
+    Realiza búsqueda puramente semántica (Dense Only) usando embeddings.
     """
     def __init__(self, vector_store: VectorStoreImpl, embedder: AbstractEmbedder):
         self.vector_store = vector_store
         self.embedder = embedder
 
     def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
-        # Embed query
+        # 1. Embed query (Dense)
         query_chunk = ProcessedChunk(content=query)
-        # Note: embed_chunks usually expects list
-        query_vector = self.embedder.embed_chunks([query_chunk])[0]
+        query_dense = self.embedder.embed_chunks([query_chunk])[0]
         
-        # Query DB
-        results_dict = self.vector_store.query_data(query_vector, top_k=top_k, filters=filters)
+        # 2. Query Vector Store (Dense)
+        # Assuming database impl has query_data which does dense search or generic search
+        results_dict = self.vector_store.query_data(query_dense, top_k=top_k, filters=filters)
+            
+        return [ProcessedChunk(**r) for r in results_dict]
+
+
+class QdrantHybridStrategy(RetrievalStrategy):
+    """
+    Realiza búsqueda híbrida (Dense + Sparse) usando los métodos nativos de Qdrant.
+    """
+    def __init__(self, vector_store: VectorStoreImpl, embedder: AbstractEmbedder, sparse_encoder: Any):
+        self.vector_store = vector_store
+        self.embedder = embedder
+        self.sparse_encoder = sparse_encoder # BM25Adapter o BM25API
+
+    def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
+        # 1. Embed dense
+        query_chunk = ProcessedChunk(content=query)
+        # Assuming embedder returns np.ndarray of shape (1, dim)
+        query_dense = self.embedder.embed_chunks([query_chunk])[0]
+        
+        # 2. Embed sparse
+        # Assuming sparse_encoder has .encode(query) that returns {"indices":..., "values":...}
+        # Note: In rag_core, BM25API has .encode(query). BM25Adapter wraps it but for chunks.
+        # We need access to the underlying encoder logic for the query.
+        if hasattr(self.sparse_encoder, "model") and hasattr(self.sparse_encoder.model, "encode"):
+             # It's an Adapter wrapping the API
+             query_sparse = self.sparse_encoder.model.encode(query)
+        elif hasattr(self.sparse_encoder, "encode"):
+             # It's the API directly
+             query_sparse = self.sparse_encoder.encode(query)
+        else:
+             print("[HybridStrategy] Warning: Sparse encoder does not support query encoding. Fallback to empty.")
+             query_sparse = {"indices": [], "values": []}
+
+        # 3. Hybrid Query in Qdrant
+        # We need to cast vector_store to QdrantImpl to access query_hybrid (not part of generic interface yet, or we assume it is)
+        if hasattr(self.vector_store, "query_hybrid"):
+            results_dict = self.vector_store.query_hybrid(query_dense, query_sparse, top_k=top_k, filters=filters)
+        else:
+            print("[HybridStrategy] Warning: Vector store does not support query_hybrid. Fallback to dense.")
+            results_dict = self.vector_store.query_data(query_dense, top_k=top_k, filters=filters)
+            
         return [ProcessedChunk(**r) for r in results_dict]
 
 
