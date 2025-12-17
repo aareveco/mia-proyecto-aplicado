@@ -7,6 +7,10 @@ Verifica que todos los componentes estén correctamente instalados y configurado
 import sys
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde .env
+load_dotenv()
 
 def print_header(text):
     print("\n" + "=" * 70)
@@ -160,10 +164,11 @@ def main():
     
     # 5. Archivos
     print("\n📄 ARCHIVOS")
-    pdf_path = os.getenv("PDF_PATH", "sample_document.pdf")
-    all_checks.append(check_file_exists(pdf_path, required=False))
-    all_checks.append(check_file_exists("rag_production.py", required=True))
-    all_checks.append(check_file_exists("requirements_production.txt", required=True))
+    pdf_folder = os.getenv("PDF_FOLDER", "data")
+    all_checks.append(check_file_exists(pdf_folder, required=False))
+    all_checks.append(check_file_exists("rag_core.py", required=True))
+    all_checks.append(check_file_exists("1_setup_pipeline.py", required=True))
+    all_checks.append(check_file_exists("2_query_rag.py", required=True))
     
     # Resumen
     print_header("RESUMEN")
@@ -178,7 +183,10 @@ def main():
     
     if failed == 0:
         print("\n🎉 ¡Todo está configurado correctamente!")
-        print("   Puedes ejecutar: python rag_production.py")
+        print("   Puedes ejecutar:")
+        print("   - uv run 1_setup_pipeline.py (indexar documentos)")
+        print("   - uv run 2_query_rag.py (consultas)")
+        print("   - streamlit run 3_streamlit_app.py (interfaz web)")
         return 0
     else:
         print("\n⚠️  Hay problemas de configuración.")
