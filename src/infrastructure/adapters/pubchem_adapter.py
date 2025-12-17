@@ -11,55 +11,88 @@ class PubChemAdapter(PubChemService):
 
     def get_compound_by_mz(self, mz: float, tolerance: float = 0.01) -> Optional[Dict[str, Any]]:
         """
-        Search for compounds within mz +/- tolerance range.
-        Returns details of the first few matches.
+        Search for compounds by converting input m/z to potential neutral masses (Adducts).
+        Considers: Neutral (M), Protonated [M+H]+, Deprotonated [M-H]-
         """
-        min_mz = mz - tolerance
-        max_mz = mz + tolerance
+        # Common Adducts (Mass diff from Neutral M)
+        # [M+H]+ : M = mz - 1.007276
+        # [M-H]- : M = mz + 1.007276
+        # Neutral: M = mz
         
-        # 1. Search CIDs by Mass Range
-        # URL: .../compound/monoisotopic_mass/range/{min}/{max}/cids/JSON
-        search_url = f"{self.BASE_URL}/compound/monoisotopic_mass/range/{min_mz}/{max_mz}/cids/JSON"
+        proton_mass = 1.007276
+        
+        potential_masses = [
+            {"label": "Neutral (M)", "mass": mz},
+            {"label": "[M+H]+", "mass": mz - proton_mass},
+            {"label": "[M-H]-", "mass": mz + proton_mass}
+        ]
+
+        all_results = []
+        
+        for p in potential_masses:
+            target_mass = p["mass"]
+            if target_mass <= 0:
+                continue
+                
+            min_mz = target_mass - tolerance
+            max_mz = target_mass + tolerance
+            
+            # URL: .../compound/monoisotopic_mass/range/{min}/{max}/cids/JSON
+            search_url = f"{self.BASE_URL}/compound/monoisotopic_mass/range/{min_mz}/{max_mz}/cids/JSON"
+            
+            try:
+                response = requests.get(search_url, timeout=20)
+                if response.status_code == 200:
+                    data = response.json()
+                    cids = data.get("IdentifierList", {}).get("CID", [])
+                    if cids:
+                        # Take top 2 per adduct to keep it diverse but concise
+                        for cid in cids[:2]:
+                            all_results.append({"cid": cid, "adduct": p["label"]})
+            except Exception as e:
+                print(f"[PubChem] Error searching mass {target_mass} ({p['label']}): {e}")
+
+        if not all_results:
+            return None
+            
+        # Deduplicate by CID
+        unique_cids = {}
+        for item in all_results:
+            if item["cid"] not in unique_cids:
+                unique_cids[item["cid"]] = item["adduct"]
+        
+        # Limit total results
+        final_cids = list(unique_cids.keys())[:5]
+        
+        if not final_cids:
+            return None
+
+        # 2. Fetch Details
+        cids_str = ",".join(map(str, final_cids))
+        details_url = f"{self.BASE_URL}/compound/cid/{cids_str}/property/Title,MolecularFormula/JSON"
         
         try:
-            response = requests.get(search_url, timeout=5)
-            if response.status_code != 200:
-                print(f"[PubChem] No results or error for mass range {min_mz}-{max_mz}. Status: {response.status_code}")
-                return None
-            
-            data = response.json()
-            cids = data.get("IdentifierList", {}).get("CID", [])
-            
-            if not cids:
-                return None
-            
-            # Limit to top 5 to avoid huge payloads
-            top_cids = cids[:5]
-            
-            # 2. Fetch Details (Title/Synonyms usually most useful)
-            # URL: .../compound/cid/{cids_str}/property/Title,MolecularFormula/JSON
-            cids_str = ",".join(map(str, top_cids))
-            details_url = f"{self.BASE_URL}/compound/cid/{cids_str}/property/Title,MolecularFormula/JSON"
-            
-            details_resp = requests.get(details_url, timeout=5)
+            details_resp = requests.get(details_url, timeout=20)
             if details_resp.status_code != 200:
-                print(f"[PubChem] Error fetching details for CIDs {cids_str}")
-                return {"cids": top_cids}
+                return {"cids": final_cids}
                 
             props = details_resp.json().get("PropertyTable", {}).get("Properties", [])
             
-            # --- NEW: Fetch BioAssays for the top 1 compound to add bioactivity context ---
-            # We only do it for the first one to save time/bandwidth in this demo
-            if top_cids:
-                main_cid = top_cids[0]
-                bio_info = self._fetch_bioassays(main_cid)
-                # Attach to the first property object if it matches CID (it should)
-                for p in props:
-                    if p.get("CID") == main_cid:
-                        p["Bioactivity"] = bio_info
-                        break
+            # Add Adduct info and Bioassays
+            # Only fetch bioassays for the very first match to save time
+            bio_fetched = False
+            for p in props:
+                cid = p.get("CID")
+                # Add Adduct Label
+                p["Adduct"] = unique_cids.get(cid, "Unknown")
+                
+                if not bio_fetched:
+                    bio_info = self._fetch_bioassays(cid)
+                    p["Bioactivity"] = bio_info
+                    bio_fetched = True
+                else:
+                    p["Bioactivity"] = []
 
-            # Construct a rich result
             result_context = {
                 "source": "PubChem",
                 "search_mz": mz,
@@ -68,7 +101,7 @@ class PubChemAdapter(PubChemService):
             return result_context
 
         except Exception as e:
-            print(f"[PubChem] Exception during API call: {e}")
+            print(f"[PubChem] Exception fetching details: {e}")
             return None
 
     def _fetch_bioassays(self, cid: int, limit: int = 5) -> List[str]:
@@ -79,7 +112,7 @@ class PubChemAdapter(PubChemService):
         url = f"{self.BASE_URL}/compound/cid/{cid}/assaysummary/JSON"
         try:
             # Short timeout, optional feature
-            resp = requests.get(url, timeout=3)
+            resp = requests.get(url, timeout=5)
             if resp.status_code != 200:
                 return []
             

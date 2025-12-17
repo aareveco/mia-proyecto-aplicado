@@ -433,6 +433,11 @@ def main():
                     with st.expander("3️⃣ Cross-Encoder Reranking", expanded=True):
                         start_time = time.time()
                         
+                        # Debug: Show sources BEFORE reranking
+                        sources_before = [c.metadata.get("source", "internal") if c.metadata else "internal" for c in current_candidates]
+                        pubchem_count_before = sum(1 for s in sources_before if s == "PubChem")
+                        print(f"[APP] BEFORE Reranking: {len(current_candidates)} candidates, {pubchem_count_before} from PubChem")
+                        
                         texts = [c.content for c in current_candidates]
                         scores = rag_service.reranker_service.rerank(current_query, texts)
                         
@@ -443,7 +448,28 @@ def main():
                             scored_candidates.append(chunk)
                         
                         scored_candidates.sort(key=lambda x: x.rerank_score, reverse=True)
-                        final_selection = scored_candidates[:k_results]
+                        
+                        # Force-include PubChem chunks if present (they were specifically requested via m/z filter)
+                        pubchem_chunks = [c for c in scored_candidates if c.metadata and c.metadata.get("source") == "PubChem"]
+                        non_pubchem_chunks = [c for c in scored_candidates if not (c.metadata and c.metadata.get("source") == "PubChem")]
+                        
+                        print(f"[APP] Force-include check: Found {len(pubchem_chunks)} PubChem chunks in scored_candidates")
+                        if pubchem_chunks:
+                            print(f"[APP] PubChem chunk metadata: {pubchem_chunks[0].metadata}")
+                        
+                        if pubchem_chunks:
+                            # Reserve 1 slot for PubChem, fill rest with top non-PubChem chunks
+                            final_selection = pubchem_chunks[:1] + non_pubchem_chunks[:k_results-1]
+                            st.info(f"ℹ️ Force-included {len(pubchem_chunks[:1])} PubChem chunk(s) (m/z filter active)")
+                        else:
+                            # No PubChem chunks, just take top k
+                            final_selection = scored_candidates[:k_results]
+                        
+                        # Debug: Show sources AFTER reranking
+                        sources_after = [(c.metadata.get("source", "internal") if c.metadata else "internal", c.rerank_score) for c in final_selection]
+                        pubchem_in_final = sum(1 for s, _ in sources_after if s == "PubChem")
+                        print(f"[APP] AFTER Reranking (top {k_results}): {pubchem_in_final} from PubChem")
+                        print(f"[APP] Top {k_results} sources: {sources_after}")
                         
                         # Viz
                         score_data = {"Chunk": [c.chunk_id or "ext" for c in final_selection], "Score": [c.rerank_score for c in final_selection]}

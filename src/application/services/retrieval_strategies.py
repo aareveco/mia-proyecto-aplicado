@@ -52,7 +52,10 @@ class PubChemRetriever(RetrievalStrategy):
         result = self.pubchem.get_compound_by_mz(mz_val)
         
         if not result:
+            print(f"[PubChemRetriever] No result returned for {mz_val}")
             return []
+        
+        print(f"[PubChemRetriever] Result found: {len(result.get('compounds', []))} compounds.")
             
         # Convert result to ProcessedChunk
         # We create a synthetic chunk with the compound info
@@ -70,12 +73,14 @@ class PubChemRetriever(RetrievalStrategy):
         
         chunk = ProcessedChunk(
             content=full_content,
+            source_file="PubChem",  # Set source_file for UI display
             metadata={
                 "source": "PubChem",
                 "mz_query": mz_val,
                 "raw_result": str(result)
             }
         )
+        print(f"[PubChemRetriever] Returning 1 chunk with {len(compounds)} compounds")
         return [chunk]
 
 
@@ -124,12 +129,15 @@ class FederatedRetriever(RetrievalStrategy):
 
     def retrieve_context(self, query: str, filters: Dict, top_k: int = 5) -> List[ProcessedChunk]:
         results_lists = []
-        for strategy in self.strategies:
+        for i, strategy in enumerate(self.strategies):
             # We could do this in parallel threads
-            results_lists.append(strategy.retrieve_context(query, filters, top_k))
+            results = strategy.retrieve_context(query, filters, top_k)
+            print(f"[FederatedRetriever] Strategy {i} ({strategy.__class__.__name__}) returned {len(results)} chunks")
+            results_lists.append(results)
         
         # Merge using RRF
         combined = reciprocal_rank_fusion(results_lists)
+        print(f"[FederatedRetriever] After RRF: {len(combined)} chunks, returning top {top_k}")
         return combined[:top_k]
 
 
@@ -202,6 +210,10 @@ class RerankingDecorator(RetrievalDecorator):
         if not candidates:
             return []
 
+        # Debug: Show sources before reranking
+        sources_before = [c.metadata.get("source", "internal") if c.metadata else "internal" for c in candidates]
+        print(f"[RerankingDecorator] Before reranking: {len(candidates)} candidates. Sources: {sources_before}")
+
         # 2. Rerank
         texts_to_rank = [c.content for c in candidates]
         scores = self.reranker_service.rerank(query, texts_to_rank)
@@ -218,7 +230,11 @@ class RerankingDecorator(RetrievalDecorator):
         # Sort by score descending
         scored_chunks.sort(key=lambda x: x[1], reverse=True)
         
-        print(f"Reordenados. Top score: {scored_chunks[0][1]:.2f}")
+        print(f"[RerankingDecorator] After reranking. Top score: {scored_chunks[0][1]:.2f}")
+        
+        # Debug: Show top sources after reranking
+        top_sources = [(c.metadata.get("source", "internal") if c.metadata else "internal", s) for c, s in scored_chunks[:top_k]]
+        print(f"[RerankingDecorator] Top {top_k} sources after rerank: {top_sources}")
 
         # Return top_k chunks
         return [c for c, _ in scored_chunks[:top_k]]

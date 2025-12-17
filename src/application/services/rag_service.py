@@ -85,7 +85,10 @@ class VectorStoreService:
         """
         Executes the full retrieval pipeline.
         """
-        return self.final_retriever.retrieve_context(query_text, {}, top_k=top_k)
+        print(f"[RAG] Starting query pipeline for: '{query_text[:50]}...' (top_k={top_k})")
+        result = self.final_retriever.retrieve_context(query_text, {}, top_k=top_k)
+        print(f"[RAG] Pipeline complete. Returning {len(result)} chunks to app.")
+        return result
 
     def generate(self, query: str, context: List[ProcessedChunk]) -> str:
         """
