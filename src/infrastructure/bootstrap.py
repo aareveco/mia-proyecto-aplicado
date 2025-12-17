@@ -11,7 +11,8 @@ def create_rag_service(
     qdrant_path: str,
     qdrant_collection: str = "rag_chunks",
     enable_pubchem: bool = False,
-    bm25_path: str = "bm25_index.pkl"
+    bm25_path: str = "bm25_index.pkl",
+    llm_provider: str = "gemini"
 ) -> VectorStoreService:
     """
     Factory function to create a fully configured VectorStoreService.
@@ -30,8 +31,8 @@ def create_rag_service(
     
     # 3. Infrastructure Services
     # llm_service = LocalLLMService()
-    print("[Bootstrap] Initializing Gemini LLM Service...")
-    llm_service = LLMFactory.get_app_llm(provider="gemini", model="gemini-2.0-flash-exp")
+    print(f"[Bootstrap] Initializing {llm_provider} LLM Service...")
+    llm_service = LLMFactory.get_app_llm(provider=llm_provider, model="gemini-2.0-flash-exp" if llm_provider == "gemini" else "qwen2.5:1.5b")
     reranker_service = CrossEncoderRerankerService()
     
     # 4. Sparse Embedding / Retrieval (Unified)

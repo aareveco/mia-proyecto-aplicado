@@ -3,6 +3,12 @@ import os
 
 # Add project root to path
 sys.path.append(os.getcwd())
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("Loaded environment variables.")
+except ImportError:
+    print("python-dotenv not installed or failed to load.")
 
 from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
 from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
