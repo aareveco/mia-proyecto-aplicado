@@ -1,5 +1,5 @@
 from src.application.services.ingestion_pipeline import ChunkProcessor
-# from src.infrastructure.embeddings.bm25 import BM25Adapter # Deprecated
+
 from src.infrastructure.retrieval.bm25_service import BM25Service
 from src.domain.models import ProcessedChunk
 from typing import List

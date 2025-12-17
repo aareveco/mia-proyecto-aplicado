@@ -11,7 +11,11 @@ from ragas.embeddings import LangchainEmbeddingsWrapper
 # Application Dependencies
 from src.application.ports.llm_port import LLMService
 from src.infrastructure.llm.local_llm_service import LocalLLMService
+from src.infrastructure.llm.local_llm_service import LocalLLMService
 from src.infrastructure.llm.gemini_llm_service import GeminiLLMService
+from src.application.ports.embedder_port import AbstractEmbedder
+from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
+from src.infrastructure.embeddings.gemini import GeminiEmbedder
 
 class LLMFactory:
     """
@@ -32,6 +36,21 @@ class LLMFactory:
             model = kwargs.get("model", "qwen2.5:1.5b")
             print(f"[LLMFactory] Initializing Local LLM Service ({model})...")
             return LocalLLMService(model_name=model)
+
+    @staticmethod
+    def get_app_embeddings(provider: Literal["local", "gemini"] = "local", **kwargs) -> AbstractEmbedder:
+        """
+        Returns the concrete implementation of AbstractEmbedder for the application.
+        """
+        if provider == "gemini":
+            model = kwargs.get("model", "models/text-embedding-004")
+            print(f"[LLMFactory] Initializing Gemini Embeddings ({model})...")
+            return GeminiEmbedder(model_name=model)
+        else:
+            # Default to local HuggingFace
+            model = kwargs.get("model", "all-MiniLM-L6-v2")
+            print(f"[LLMFactory] Initializing Local HuggingFace Embeddings ({model})...")
+            return HuggingFaceEmbedder(model_name=model)
 
     @staticmethod
     def get_ragas_llm(provider: Literal["local", "gemini"] = "local", **kwargs):

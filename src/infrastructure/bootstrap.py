@@ -1,5 +1,5 @@
 from typing import Optional
-from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
+
 from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
 from src.application.services.rag_service import VectorStoreService
 from src.infrastructure.llm.llm_factory import LLMFactory
@@ -18,7 +18,9 @@ def create_rag_service(
     """
     
     # 1. Embeddings
-    embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
+    # 1. Embeddings
+    # Centralized creation via Factory (defaults to local/HF, can be switched to gemini)
+    embedder = LLMFactory.get_app_embeddings(provider="local", model="all-MiniLM-L6-v2")
     
     # 2. Vector Store
     # Use path for disk storage or None for memory.

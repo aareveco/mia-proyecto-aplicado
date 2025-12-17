@@ -13,12 +13,11 @@ from src.infrastructure.processors.processors import CleanerProcessor, MetadataE
 from src.infrastructure.processors.sparse_processor import SparseEmbeddingProcessor
 from src.infrastructure.loaders.factory import DocumentLoaderFactory
 from src.domain.models import ProcessedChunk
+from src.infrastructure.evaluation.evaluator_service import EvaluatorService
 
 # Imports for Benchmark
 from datasets import Dataset
-from ragas import evaluate
-from ragas.metrics import context_precision, context_recall
-from ragas.run_config import RunConfig
+
 
 # Load env vars
 load_dotenv()
@@ -275,75 +274,7 @@ def render_chunk_card_html(chunk: ProcessedChunk, index: int):
     </div>
     """)
 
-class BaselineEvaluator:
-    """Evaluador de Ragas (Portado de app.py anterior)"""
-    def __init__(self, rag_service: VectorStoreService):
-        self.rag_service = rag_service
 
-    def run_benchmark(self):
-        if not os.path.exists(DATASET_PATH):
-            return None, f"❌ No se encontró '{DATASET_PATH}'."
-
-        df = pd.read_csv(DATASET_PATH)
-        if "question" not in df.columns or "ground_truth" not in df.columns: # Fixed: reference_contexts vs ground_truth mapping
-             # app.py used 'reference_contexts' as 'ground_truths' list? 
-             # Let's verify dataset structure later. Assuming standard names or fallback.
-             if "reference_contexts" in df.columns:
-                 df["ground_truth"] = df["reference_contexts"] # Map it
-             
-        if "ground_truth" not in df.columns:
-             return None, "❌ Falta columna 'ground_truth' o 'reference_contexts'."
-
-        questions = df["question"].tolist()
-        ground_truths = df["ground_truth"].tolist() 
-        
-        answers = []
-        contexts = []
-
-        progress_bar = st.progress(0)
-        status = st.empty()
-        total = len(questions)
-        
-        for i, q in enumerate(questions):
-            status.text(f"Evaluando {i+1}/{total}: {q[:40]}...")
-            
-            # Call query
-            results = self.rag_service.query(q, top_k=3)
-            
-            retrieved_text = [c.content for c in results]
-            generated_answer = results[0].content if results else "No information found." # Fake generation for now
-            
-            answers.append(generated_answer)
-            contexts.append(retrieved_text)
-            progress_bar.progress((i + 1) / total)
-
-        eval_data = {
-            "question": questions,
-            "answer": answers,
-            "contexts": contexts,
-            "ground_truth": ground_truths,
-        }
-        eval_dataset = Dataset.from_dict(eval_data)
-
-        status.text("Calculando métricas Ragas (Local)...")
-        
-        # Local LLM for Eval (via Bootstrap)
-        from src.infrastructure.bootstrap import create_evaluation_resources
-        llm, embeddings = create_evaluation_resources()
-
-        run_config = RunConfig(timeout=120, max_workers=2, max_retries=2)
-
-        result = evaluate(
-            eval_dataset,
-            metrics=[context_precision, context_recall],
-            llm=llm,
-            embeddings=embeddings,
-            run_config=run_config,
-            raise_exceptions=False,
-        )
-
-        progress_bar.empty()
-        return result.to_pandas(), result
 
 
 # ==============================================================================
@@ -613,9 +544,20 @@ def main():
     with tab_eval:
         st.subheader("Evaluación Ragas (Dataset Golden)")
         if st.button("📉 Ejecutar Benchmark"):
-            evaluator = BaselineEvaluator(rag_service)
+
+            evaluator = EvaluatorService(rag_service)
+            status_text = st.empty()
+            progress_bar = st.progress(0)
+            
+            def update_progress(current, total, msg):
+                status_text.text(msg)
+                progress_bar.progress(current / total)
+
             with st.spinner("Evaluando... (Esto toma tiempo)"):
-                df_res, metrics = evaluator.run_benchmark()
+                df_res, metrics = evaluator.run_benchmark(DATASET_PATH, progress_callback=update_progress)
+            
+            progress_bar.empty()
+            status_text.empty()
             
             if isinstance(df_res, str):
                 st.error(df_res)
