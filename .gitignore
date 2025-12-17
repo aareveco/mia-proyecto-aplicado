@@ -9,3 +9,4 @@ data_val*
 data_quarantine*
 *.log
 qdrant_storage*
+*.pkl

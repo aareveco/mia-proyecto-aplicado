@@ -7,8 +7,13 @@ from dotenv import load_dotenv
 
 from src.infrastructure.embeddings.huggingface import HuggingFaceEmbedder
 from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
-from src.application.services.rag_service import VectorStoreService, run_indexing_service, run_retrieval_service
+from src.application.services.rag_service import VectorStoreService, run_retrieval_service
 from src.infrastructure.llm.local_llm_factory import LocalResourcesFactory
+# Infrastructure Imports for Injection
+from src.infrastructure.llm.local_llm_service import LocalLLMService
+from src.infrastructure.reranker.cross_encoder_reranker import CrossEncoderRerankerService
+from src.infrastructure.retrieval.bm25_service import BM25RetrieverImpl
+from src.infrastructure.loaders.factory import DocumentLoaderFactory
 
 from datasets import Dataset
 from ragas import evaluate
@@ -24,6 +29,34 @@ QDRANT_PATH = "qdrant_storage" # La misma ruta  que run_eval.py
 DATASET_PATH = "datasets/golden_dataset.csv"
 
 st.set_page_config(page_title="Hito 1: Clean RAG Architecture", layout="wide")
+
+# ==============================================================================
+# Helper Function (Moved from rag_service.py to keep Application layer clean)
+# ==============================================================================
+from src.application.services.ingestion_pipeline import IngestionPipeline
+from src.infrastructure.processors.processors import CleanerProcessor, MetadataExtractorProcessor
+
+def run_indexing_service(
+    file_path: str,
+    vector_store: VectorStoreService,
+    overwrite: bool = False,
+) -> None:
+    loader = DocumentLoaderFactory.get_loader(file_path)
+    chunks = loader.load_and_chunk(file_path)
+    
+    # --- PIPELINE STEP ---
+    pipeline = IngestionPipeline([
+        CleanerProcessor(),
+        MetadataExtractorProcessor()
+    ])
+    
+    print("[Index] Ejecutando Pipeline de Ingesta (Limpieza + Extracción)...")
+    refined_chunks = pipeline.run(chunks)
+    # ---------------------
+
+    print("[Index] Generando embeddings e indexando en Qdrant...")
+    vector_store.index_chunks(refined_chunks, overwrite=overwrite)
+    print("[Index] Listo.")
 
 # ==============================================================================
 # 1. CAPA DE APLICACIÓN (Inicialización)
@@ -42,9 +75,20 @@ def get_vector_service() -> VectorStoreService:
     # 2. Adaptador de Base de Datos Vectorial (CON PERSISTENCIA)
     db_impl = QdrantImpl(collection_name="rag_chunks", path=QDRANT_PATH)
     
-    # 3. Inyección de dependencias
+    # 3. New Infrastructure Services
+    llm_service = LocalLLMService()
+    reranker_service = CrossEncoderRerankerService()
+    bm25_service = BM25RetrieverImpl(storage_path="data/bm25_index.pkl")
+
+    # 4. Inyección de dependencias
     # Force cache invalidation for overwrite flag update
-    service = VectorStoreService(embedder=embedder, db_impl=db_impl)
+    service = VectorStoreService(
+        embedder=embedder, 
+        db_impl=db_impl,
+        llm_service=llm_service,
+        reranker_service=reranker_service,
+        sparse_retriever=bm25_service
+    )
     return service
 
 # ==============================================================================
