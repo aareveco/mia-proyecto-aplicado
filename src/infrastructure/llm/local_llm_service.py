@@ -50,5 +50,7 @@ class LocalLLMService(LLMService):
             
             # Better Fallback: try to see if it looks like a python dict string
             # But for now, returning a safe object is best to avoid crash.
-            return response_model(rewritten_query="ERROR_PARSING_QUERY", metadata_filters={})
+            # We return an empty instance of the requested model
+            print("RETURNING EMPTY FALLBACK MODEL")
+            return response_model()
 

@@ -8,10 +8,7 @@ import textwrap
 
 from src.infrastructure.bootstrap import create_rag_service
 from src.application.services.rag_service import VectorStoreService
-from src.application.services.ingestion_pipeline import IngestionPipeline
-from src.infrastructure.processors.processors import CleanerProcessor, MetadataExtractorProcessor
-from src.infrastructure.processors.sparse_processor import SparseEmbeddingProcessor
-from src.infrastructure.loaders.factory import DocumentLoaderFactory
+from src.application.services.ingestion_service import IngestionService
 from src.domain.models import ProcessedChunk
 from src.infrastructure.evaluation.evaluator_service import EvaluatorService
 
@@ -167,27 +164,12 @@ def get_rag_service() -> VectorStoreService:
 
 def run_indexing_service(
     file_path: str,
-    vector_store: VectorStoreService,
+    rag_service: VectorStoreService,
     overwrite: bool = False,
 ) -> None:
-    loader = DocumentLoaderFactory.get_loader(file_path)
-    chunks = loader.load_and_chunk(file_path)
-    
-    # --- PIPELINE STEP ---
-    # Injecting SparseEmbeddingProcessor using the adapter from service
-    pipeline = IngestionPipeline([
-        CleanerProcessor(),
-        MetadataExtractorProcessor(),
-        SparseEmbeddingProcessor(service=vector_store.sparse_retriever)
-    ])
-    
-    print("[Index] Ejecutando Pipeline de Ingesta (Limpieza + Extracción + Sparse)...")
-    refined_chunks = pipeline.run(chunks)
-    # ---------------------
-
-    print("[Index] Generando embeddings e indexando en Qdrant...")
-    vector_store.index_chunks(refined_chunks, overwrite=overwrite)
-    print("[Index] Listo.")
+    """Delgates to the Application Service."""
+    ingestion_service = IngestionService(rag_service)
+    ingestion_service.run_ingestion(file_path, overwrite=overwrite)
 
 # ==============================================================================
 # 3. UI HELPERS

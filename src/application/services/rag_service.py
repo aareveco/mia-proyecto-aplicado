@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import numpy as np
 
 from src.domain.models import ProcessedChunk
@@ -34,7 +34,7 @@ class VectorStoreService:
         db_impl: VectorStoreImpl,
         llm_service: LLMService,
         reranker_service: RerankerService,
-        sparse_retriever: RetrievalStrategy, 
+        sparse_retriever: Any, # Should implement RetrievalStrategy AND SparseEncoder
         pubchem_service: Optional[PubChemService] = None, 
         # Optional: Allow overriding the composition logic or strategies if needed, 
         # but for now we compose them here using the injected components.
