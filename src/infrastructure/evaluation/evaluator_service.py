@@ -60,15 +60,12 @@ class EvaluatorService:
             # We use the default top_k=3 or configurable? Let's use 3 for benchmark consistency.
             results = self.rag_service.query(q, top_k=3)
             
-            retrieved_text = [c.content for c in results]
+            contexts.append([c.content for c in results])
             
-            if results:
-                generated_answer = results[0].content 
-            else:
-                generated_answer = "No information found."
-
+            # Generate Answer (End-to-End Evaluation)
+            # Before we were just using the top chunk. Now we generate.
+            generated_answer = self.rag_service.generate(q, results)
             answers.append(generated_answer)
-            contexts.append(retrieved_text)
 
         eval_data = {
             "question": questions,
@@ -79,7 +76,7 @@ class EvaluatorService:
         eval_dataset = Dataset.from_dict(eval_data)
 
         if progress_callback:
-            progress_callback(total, total, "Calculando métricas Ragas (Local)...")
+            progress_callback(total, total, "Calculando métricas Ragas (End-to-End)...")
         
         # Factory for Ragas Resources
         try:
@@ -92,9 +89,17 @@ class EvaluatorService:
 
         run_config = RunConfig(timeout=120, max_workers=2, max_retries=2)
 
+        # Usamos métricas de Contexto (Retrieval) y Generación (LLM Judge)
+        from ragas.metrics import context_precision, context_recall, answer_correctness, faithfulness
+
         result = evaluate(
             eval_dataset,
-            metrics=[context_precision, context_recall],
+            metrics=[
+                context_precision, 
+                context_recall, 
+                answer_correctness, 
+                faithfulness
+            ],
             llm=llm,
             embeddings=embeddings,
             run_config=run_config,

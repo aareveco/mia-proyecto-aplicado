@@ -572,11 +572,16 @@ def main():
             else:
                 st.success("Evaluación finalizada.")
                 # Show metrics
-                c1, c2 = st.columns(2)
+                c1, c2, c3, c4 = st.columns(4)
                 p = df_res.get("context_precision", pd.Series([0])).mean()
                 r = df_res.get("context_recall", pd.Series([0])).mean()
-                c1.metric("Precision", f"{p:.4f}")
-                c2.metric("Recall", f"{r:.4f}")
+                ac = df_res.get("answer_correctness", pd.Series([0])).mean()
+                f = df_res.get("faithfulness", pd.Series([0])).mean()
+                
+                c1.metric("Retrieval Precision", f"{p:.4f}")
+                c2.metric("Retrieval Recall", f"{r:.4f}")
+                c3.metric("Answer Correctness", f"{ac:.4f}")
+                c4.metric("Faithfulness", f"{f:.4f}")
                 
                 st.dataframe(df_res)
 

@@ -12,3 +12,4 @@ qdrant_storage*
 qdrant_test_storage*
 *.pkl
 /scripts*
+/data/*.pdf
