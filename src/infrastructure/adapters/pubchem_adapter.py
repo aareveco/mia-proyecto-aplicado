@@ -1,3 +1,4 @@
+# src/infrastructure/adapters/pubchem_adapter.py
 import requests
 import time
 from typing import Optional, Dict, Any, List

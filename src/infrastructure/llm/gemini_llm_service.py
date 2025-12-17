@@ -1,51 +1,70 @@
-# src/infrastructure/llm/local_llm_service.py
+# src/infrastructure/llm/gemini_llm_service.py
 from typing import Dict, Any
 import json
+import os
 from src.application.ports.llm_port import LLMService
 from src.domain.models import FilterSuggestion
 
 
-class LocalLLMService(LLMService):
+class GeminiLLMService(LLMService):
     """
-    Implementación del LLM Port usando Ollama local.
+    Implementación del LLM Port usando Google Gemini.
     """
 
-    def __init__(self, model_name: str = "qwen2.5:1.5b"):
+    def __init__(self, model_name: str = "gemini-2.0-flash-exp", api_key: str = None):
         self.model_name = model_name
-        # Import here to avoid dependency at module level
-        from langchain_ollama import ChatOllama
-        self.llm = ChatOllama(model=model_name, temperature=0.1)
+        
+        # Import Gemini
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        
+        api_key = api_key or os.getenv("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY no está configurada.")
+        
+        self.llm = ChatGoogleGenerativeAI(
+            model=model_name,
+            google_api_key=api_key,
+            temperature=0.1,
+            max_output_tokens=2048,
+        )
 
     def generate_text(self, prompt: str) -> str:
-        """Genera texto usando Ollama"""
+        """Genera texto usando Gemini"""
         try:
             response = self.llm.invoke(prompt)
             return response.content if hasattr(response, "content") else str(response)
         except Exception as e:
-            print(f"[LLM Error]: {e}")
+            print(f"[Gemini Error]: {e}")
             return "Error generating response."
 
     def generate_structured(
         self, prompt: str, response_model: type[FilterSuggestion]
     ) -> FilterSuggestion:
         """
-        Genera respuesta estructurada usando Ollama con JSON mode.
+        Genera respuesta estructurada usando Gemini.
         """
         try:
-            # Usar with_structured_output si está disponible
+            # Gemini soporta structured output con with_structured_output
             if hasattr(self.llm, "with_structured_output"):
                 structured_llm = self.llm.with_structured_output(response_model)
                 result = structured_llm.invoke(prompt)
+                
+                # Asegurar que target_mz y target_rt estén en metadata_filters
+                if result.target_mz is not None and "target_mz" not in result.metadata_filters:
+                    result.metadata_filters["target_mz"] = result.target_mz
+                if result.target_rt is not None and "target_rt" not in result.metadata_filters:
+                    result.metadata_filters["target_rt"] = result.target_rt
+                
                 return result
             else:
-                # Fallback: pedir JSON y parsear manualmente
+                # Fallback: pedir JSON y parsear
                 json_prompt = f"{prompt}\n\nResponde SOLO en formato JSON válido."
                 response = self.llm.invoke(json_prompt)
                 content = (
                     response.content if hasattr(response, "content") else str(response)
                 )
 
-                # Limpiar markdown code blocks si existen
+                # Limpiar markdown code blocks
                 if "```json" in content:
                     content = content.split("```json")[1].split("```")[0].strip()
                 elif "```" in content:
@@ -73,14 +92,12 @@ class LocalLLMService(LLMService):
                 )
 
         except Exception as e:
-            print(f"[LLM Error]: {e}")
-            # Fallback
+            print(f"[Gemini Error]: {e}")
             return FilterSuggestion(rewritten_query=prompt, metadata_filters={})
 
     def extract_chunk_metadata(self, text: str) -> Dict[str, Any]:
         """
-        Extrae metadata estructurada del chunk usando LLM.
-        Retorna dict con: mz_values, rt_values, compound_names, bioactivities
+        Extrae metadata estructurada del chunk usando Gemini.
         """
         if len(text.strip()) < 50:
             return {
@@ -124,7 +141,7 @@ Texto:
             }
 
         except Exception as e:
-            print(f"[LLM Metadata Extraction Error]: {e}")
+            print(f"[Gemini Metadata Extraction Error]: {e}")
             return {
                 "mz_values": None,
                 "rt_values": None,

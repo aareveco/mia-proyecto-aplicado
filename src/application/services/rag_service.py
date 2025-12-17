@@ -1,3 +1,4 @@
+# src/application/services/rag_service.py
 from typing import List, Dict, Optional
 import numpy as np
 
@@ -10,35 +11,30 @@ from src.application.ports.reranker_port import RerankerService
 from src.application.services.query_processing import QueryRewritingStrategy
 from src.application.ports.pubchem_port import PubChemService
 from src.application.services.retrieval_strategies import (
-    CompositionalHybridSearchRetriever,
     FederatedRetriever,
     PubChemRetriever,
     QueryOptimizerRetriever,
     RerankingDecorator,
     ContextRepackerDecorator,
-    VectorRetrievalStrategy
+    VectorRetrievalStrategy,
 )
 from src.application.services.generation_service import AugmentedGenerator
 
 
-
-
-
 class VectorStoreService:
     """
-    Updated Service handling the full RAG pipeline (Advanced) with Dependency Injection.
+    Service handling the full RAG pipeline (Advanced) with Dependency Injection.
+    Supports metadata extraction and structured filtering.
     """
 
     def __init__(
-        self, 
-        embedder: AbstractEmbedder, 
+        self,
+        embedder: AbstractEmbedder,
         db_impl: VectorStoreImpl,
         llm_service: LLMService,
         reranker_service: RerankerService,
-        sparse_retriever: RetrievalStrategy, 
-        pubchem_service: Optional[PubChemService] = None, 
-        # Optional: Allow overriding the composition logic or strategies if needed, 
-        # but for now we compose them here using the injected components.
+        sparse_retriever: RetrievalStrategy,
+        pubchem_service: Optional[PubChemService] = None,
     ):
         self._embedder = embedder
         self._db_impl = db_impl
@@ -46,60 +42,64 @@ class VectorStoreService:
         self.reranker_service = reranker_service
         self.sparse_retriever = sparse_retriever
         self.pubchem_service = pubchem_service
-        
+
         # Build Retrieval Chain
-        
-        # 1. Base Strategies
+
+        # 1. Base Strategy con post-filtering
         self.dense_strategy = VectorRetrievalStrategy(self._db_impl, self._embedder)
-        
+
         # 2. Hybrid / Federated
         strategies = [self.dense_strategy, self.sparse_retriever]
         if self.pubchem_service:
             print("[Service] PubChem Service enabled. Adding PubChemRetriever.")
             self.pubchem_retriever = PubChemRetriever(self.pubchem_service)
             strategies.append(self.pubchem_retriever)
-            
+
         self.hybrid_strategy = FederatedRetriever(strategies=strategies)
-        
+
         # 3. Query Optimization
         self.query_processor = QueryRewritingStrategy(self.llm_service)
         self.optimizer_retriever = QueryOptimizerRetriever(
-            query_processor=self.query_processor,
-            retrieval_strategy=self.hybrid_strategy
+            query_processor=self.query_processor, retrieval_strategy=self.hybrid_strategy
         )
-        
+
         # 4. Reranking
         self.reranking_retriever = RerankingDecorator(
-            wrapped_strategy=self.optimizer_retriever,
-            reranker=self.reranker_service
+            wrapped_strategy=self.optimizer_retriever, reranker=self.reranker_service
         )
-        
+
         # 5. Repacking
         self.final_retriever = ContextRepackerDecorator(
             wrapped_strategy=self.reranking_retriever
         )
-        
+
         # Generation
         self.generator = AugmentedGenerator(self.llm_service)
 
-    def index_chunks(self, chunks: List[ProcessedChunk], overwrite: bool = False) -> None:
+    def index_chunks(
+        self, chunks: List[ProcessedChunk], overwrite: bool = False
+    ) -> None:
+        """
+        Indexes chunks with embeddings and metadata.
+        Supports LLM-extracted structured metadata (mz_values, rt_values, etc.)
+        """
         vectors = self._embedder.embed_chunks(chunks)
         for chunk, vec in zip(chunks, vectors):
             chunk.dense_vector = vec.tolist()
+
         metadatas = [c.model_dump() for c in chunks]
         self._db_impl.index_data(vectors, metadatas, overwrite=overwrite)
-        
-        # Index in Sparse Retriever (if it supports indexing interface)
-        # Assuming sparse_retriever has index_documents method (it might need a separate Port definition for Indexing vs Retrieval)
-        # For now, we assume it's the BM25RetrieverImpl which has it.
-        # In a strict port sense, we should have an Indexable interface.
+
+        # Index in Sparse Retriever
         if hasattr(self.sparse_retriever, "index_documents"):
-            print("[Service] Indexing in Sparse Retriever...")
+            print("[Service] Indexing in Sparse Retriever (BM25)...")
             self.sparse_retriever.index_documents(chunks, overwrite=overwrite)
 
-    def query(self, query_text: str, top_k: int = 5) -> List[ProcessedChunk]:
+    def query(
+        self, query_text: str, top_k: int = 5
+    ) -> List[ProcessedChunk]:
         """
-        Executes the full retrieval pipeline.
+        Executes the full retrieval pipeline with metadata filtering.
         """
         return self.final_retriever.retrieve_context(query_text, {}, top_k=top_k)
 
@@ -108,7 +108,3 @@ class VectorStoreService:
         Invokes the Augmented Generator.
         """
         return self.generator.generate_answer(query, context)
-
-
-
-
