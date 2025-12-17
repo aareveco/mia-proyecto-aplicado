@@ -179,7 +179,7 @@ def run_indexing_service(
     pipeline = IngestionPipeline([
         CleanerProcessor(),
         MetadataExtractorProcessor(),
-        SparseEmbeddingProcessor(adapter=vector_store.sparse_retriever)
+        SparseEmbeddingProcessor(service=vector_store.sparse_retriever)
     ])
     
     print("[Index] Ejecutando Pipeline de Ingesta (Limpieza + Extracción + Sparse)...")

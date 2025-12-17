@@ -52,7 +52,6 @@ class QueryRewritingStrategy(QueryProcessingStrategy):
         regex_filters = self._extract_regex_filters(query)
         
         # 2. LLM Semantic Rewriting + Fallback Extraction
-        # We restore the detailed prompt so LLM can try to extract if Regex fails.
         prompt = f"""You are an Expert Metabolomics Assistant.
         Your goal is to prepare a search query for a vector database and extract specific numerical filters.
 
