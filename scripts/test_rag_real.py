@@ -9,10 +9,7 @@ from src.infrastructure.vector_stores.qdrant_db import QdrantImpl
 from src.application.services.rag_service import VectorStoreService
 
 # Injectable Services
-from src.infrastructure.llm.local_llm_service import LocalLLMService
-from src.infrastructure.reranker.cross_encoder_reranker import CrossEncoderRerankerService
-from src.infrastructure.retrieval.bm25_service import BM25RetrieverImpl
-from src.infrastructure.adapters.pubchem_adapter import PubChemAdapter
+from src.infrastructure.bootstrap import create_rag_service
 from src.domain.models import ProcessedChunk
 
 # Pipeline & Loading
@@ -23,27 +20,13 @@ from src.infrastructure.processors.processors import CleanerProcessor, MetadataE
 def main():
     print("Initializing RAG Components (REAL LLM)...")
     
-    # 1. Embedder
-    embedder = HuggingFaceEmbedder(model_name="all-MiniLM-L6-v2")
-    
-    # 2. Vector Store (In-Memory for this test, or use persisted if you prefer)
-    db_impl = QdrantImpl(collection_name="test_rag_real", path=None)
-
-    # 3. Infrastructure
-    llm = LocalLLMService()
-    reranker = CrossEncoderRerankerService()
-    # Using memory storage for test BM25 (or temp path)
-    bm25 = BM25RetrieverImpl(storage_path="data/test_bm25.pkl")
-    pubchem = PubChemAdapter()
-    
-    # 3. Service (This initializes Localrep connecting to Ollama)
-    service = VectorStoreService(
-        embedder=embedder, 
-        db_impl=db_impl,
-        llm_service=llm,
-        reranker_service=reranker,
-        sparse_retriever=bm25,
-        pubchem_service=pubchem
+    # Intialize Service using Factory
+    # Path=None -> In-Memory Qdrant for testing
+    service = create_rag_service(
+         qdrant_path="qdrant_storage", 
+         qdrant_collection="test_rag_real", 
+         bm25_path="data/test_bm25.pkl",
+         enable_pubchem=True
     )
     
     # 4. Load & Process Data (Real PDF)
@@ -66,7 +49,7 @@ def main():
     refined_chunks = pipeline.run(raw_chunks)
     
     # Show example of metadata extraction
-    for i, c in enumerate(refined_chunks[:3]):
+    for i, c in enumerate(refined_chunks):
         if c.metadata.get('mz') or c.metadata.get('rt'):
              print(f"Chunk {i} extracted metadata: {c.metadata}")
 
