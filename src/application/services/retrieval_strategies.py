@@ -132,14 +132,7 @@ class FederatedRetriever(RetrievalStrategy):
         combined = reciprocal_rank_fusion(results_lists)
         return combined[:top_k]
 
-# Redefining to use composition of strategies
-class CompositionalHybridSearchRetriever(FederatedRetriever):
-    """
-    Hybrid Search using two underlying strategies.
-    (Backwards compatibility wrapper around FederatedRetriever)
-    """
-    def __init__(self, dense_strategy: RetrievalStrategy, sparse_strategy: RetrievalStrategy):
-        super().__init__([dense_strategy, sparse_strategy])
+
 
 
 

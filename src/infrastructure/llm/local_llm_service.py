@@ -41,16 +41,7 @@ class LocalLLMService(LLMService):
         except (json.JSONDecodeError, Exception) as e:
             print(f"Error parsing JSON from LLM: {e}. Raw text: {text[:50]}...")
             # Fallback: simple heuristic
-            # If we failed, let's just return the raw query as rewritten and empty filters
-            # Try to extract something if possible? No, safer to fallback safe.
-            # Extract query from prompt is hard because prompt is mixed.
-            # Let's just return a safe default using a fallback string
-            # We don't have the original query easily accessible unless we parse prompt... 
-            # actually we can modify signature or just return generic.
-            
-            # Better Fallback: try to see if it looks like a python dict string
-            # But for now, returning a safe object is best to avoid crash.
-            # We return an empty instance of the requested model
-            print("RETURNING EMPTY FALLBACK MODEL")
-            return response_model()
+            # We return the original prompt as the rewritten query to avoid crashing
+            print(f"[LocalLLM] JSON Parsing failed. Fallback: using raw prompt as query.")
+            return response_model(rewritten_query=prompt, metadata_filters={})
 

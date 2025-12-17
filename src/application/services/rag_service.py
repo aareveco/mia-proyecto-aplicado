@@ -9,19 +9,15 @@ from src.application.ports.reranker_port import RerankerService
 
 from src.application.services.query_processing import QueryRewritingStrategy
 from src.application.ports.pubchem_port import PubChemService
-from src.application.services.retrieval_strategies import (
-    CompositionalHybridSearchRetriever,
-    FederatedRetriever,
-    PubChemRetriever,
-    QueryOptimizerRetriever,
-    RerankingDecorator,
-    ContextRepackerDecorator,
-)
 from src.application.services.generation_service import AugmentedGenerator
 
 
 
 
+
+
+from src.application.ports.indexer_port import IndexerPort
+from src.application.services.retrieval_factory import RetrievalStrategyFactory
 
 class VectorStoreService:
     """
@@ -44,67 +40,21 @@ class VectorStoreService:
         self.keyword_retriever = keyword_retriever
         self.pubchem_service = pubchem_service
         
-        # Build Retrieval Chain
-        
-        # 1. Retrieval Strategies
-        from src.application.services.retrieval_strategies import DenseRetriever, FederatedRetriever
-        
-        # A. Dense Only (Semantic)
-        self.dense_strategy = DenseRetriever(
-            vector_store=self._db_impl,
-            embedder=self._embedder
-        )
-
-        # B. Hybrid (Federated: Dense + Keyword)
-        # We combine the semantic search (Dense) with the keyword search (BM25)
-        # using Reciprocal Rank Fusion via FederatedRetriever.
-        self.hybrid_strategy = FederatedRetriever(
-            strategies=[self.dense_strategy, self.keyword_retriever]
-        )
-        
-        # C. PubChem (if enabled)
-        self.pubchem_retriever = None
-        if self.pubchem_service:
-            print("[RAG Service] Integrating PubChem Retriever...")
-            self.pubchem_retriever = PubChemRetriever(self.pubchem_service)
-            
-        # Default Federated (Hybrid + PubChem) for backward compatibility
-        # If PubChem involves, we add it to the hybrid mix
-        strategies = [self.hybrid_strategy]
-        if self.pubchem_retriever:
-             strategies.append(self.pubchem_retriever)
-        
-        # Refined hierarchy: Top federator merges Hybrid (Dense+Keyword) with PubChem
-        # But FederatedRetriever flattens lists, so passing [Hybrid(Federated), PubChem] works if RRF handles it 
-        # recursively or we just pass flat list of [Dense, Keyword, PubChem]
-        # Let's keep it simple: The main strategy is Federated(Hybrid, PubChem)
-        # But wait, hybrid IS Federated([Dense, Keyword]). 
-        # So we can just make one big FederatedRetriever([Dense, Keyword, PubChem])?
-        # Yes, that's cleaner for RRF.
-        
-        federation_components = [self.dense_strategy, self.keyword_retriever]
-        if self.pubchem_retriever:
-            federation_components.append(self.pubchem_retriever)
-            
-        self.federated_strategy = FederatedRetriever(federation_components)
-        
-        # 3. Query Optimization
+        # Public Query Processor for UI interaction (e.g. rewriting preview)
         self.query_processor = QueryRewritingStrategy(self.llm_service)
-        self.optimizer_retriever = QueryOptimizerRetriever(
-            query_processor=self.query_processor,
-            retrieval_strategy=self.federated_strategy 
+        
+        # Factory for Strategy Creation
+        self.strategy_factory = RetrievalStrategyFactory(
+            embedder=embedder,
+            vector_store=db_impl,
+            llm_service=llm_service,
+            reranker=reranker_service,
+            keyword_retriever=keyword_retriever,
+            pubchem_service=pubchem_service
         )
         
-        # 4. Reranking
-        self.reranking_retriever = RerankingDecorator(
-            wrapped_strategy=self.optimizer_retriever,
-            reranker=self.reranker_service
-        )
-        
-        # 5. Repacking
-        self.final_retriever = ContextRepackerDecorator(
-            wrapped_strategy=self.reranking_retriever
-        )
+        # Initialize default strategies via Factory
+        self.final_retriever = self.strategy_factory.create_optimized_pipeline()
         
         # Generation
         self.generator = AugmentedGenerator(self.llm_service)
@@ -114,31 +64,22 @@ class VectorStoreService:
         Factory method to get a strategy based on configuration.
         mode: 'hybrid' | 'dense'
         """
-        # 1. Select Base
-        if mode == "dense":
-            base = self.dense_strategy
-        else: # default hybrid
-            base = self.hybrid_strategy
-        
-        # 2. Combine with PubChem?
-        if use_pubchem and self.pubchem_retriever:
-            return FederatedRetriever([base, self.pubchem_retriever])
-        
-        return base
+        return self.strategy_factory.create_strategy(mode=mode, use_pubchem=use_pubchem)
 
     def index_chunks(self, chunks: List[ProcessedChunk], overwrite: bool = False) -> None:
+        print("[Service] Indexing chunks in Dense Vector Store...")
         vectors = self._embedder.embed_chunks(chunks)
         for chunk, vec in zip(chunks, vectors):
             chunk.dense_vector = vec.tolist()
         metadatas = [c.model_dump() for c in chunks]
         self._db_impl.index_data(vectors, metadatas, overwrite=overwrite)
         
-        # Index in Keyword Retriever (BM25)
-        # We explicitly rely on the fact that injected keyword_retriever is BM25Service
-        # or supports index_documents.
-        if hasattr(self.keyword_retriever, "index_documents"):
+        # Index in Keyword Retriever (BM25) SAFELY using IndexerPort
+        if isinstance(self.keyword_retriever, IndexerPort):
             print("[Service] Indexing in Keyword Retriever (BM25)...")
             self.keyword_retriever.index_documents(chunks, overwrite=overwrite)
+        else:
+            print("[Service] Keyword Retriever does not support indexing (IndexerPort not implemented). Skipping.")
 
     def query(self, query_text: str, top_k: int = 5) -> List[ProcessedChunk]:
         """

@@ -4,9 +4,10 @@ import numpy as np
 from typing import List, Dict, Optional, Tuple, Any
 from rank_bm25 import BM25Okapi
 from src.application.ports.vector_store_port import RetrievalStrategy
+from src.application.ports.indexer_port import IndexerPort
 from src.domain.models import ProcessedChunk
 
-class BM25Service(RetrievalStrategy):
+class BM25Service(RetrievalStrategy, IndexerPort):
     """
     Local BM25 Service for keyword retrieval (In-Memory).
     Implements RetrievalStrategy.
