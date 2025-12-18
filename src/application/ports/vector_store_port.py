@@ -11,5 +11,14 @@ class VectorStoreImpl(ABC):
         pass
 
     @abstractmethod
-    def query_data(self, query_vector: np.ndarray, top_k: int = 5) -> List[Dict]:
+    def query_data(self, query_vector: np.ndarray, top_k: int = 5, filters: Dict = None) -> List[Dict]:
         pass
+
+
+
+class RetrievalStrategy(ABC):
+    @abstractmethod
+    def retrieve_context(self, query: str, filters: Dict, top_k: int
+                         ) -> List[ProcessedChunk]:
+        pass
+

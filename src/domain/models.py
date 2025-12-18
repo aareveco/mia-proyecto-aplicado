@@ -21,6 +21,19 @@ class ProcessedChunk(BaseModel):
     type: str | None = None # e.g., 'paragraph', 'table', 'section'
     metadata: Dict[str, Any] = Field(default_factory=dict)
     dense_vector: List[float] | None = None
-    sparse_vector: List[float] | None = None
+    sparse_vector: tuple[List[int], List[float]] | None = None  # (indices, values)
+    rerank_score: float | None = None
+
+    # Metabolomics Metadata
+    mz_values: List[float] | None = None
+    rt_values: List[float] | None = None
+    compound_names: List[str] | None = None
+    bioactivities: List[str] | None = None
 
 
+class FilterSuggestion(BaseModel):
+    """
+    Contrato pydantic para el output de query processing
+    """
+    rewritten_query: str
+    metadata_filters: Dict[str, Any] = Field(default_factory=dict)
